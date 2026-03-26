@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python -m pip install -r requirements.txt -q)",
+      "Bash(C:/Users/noahf/AppData/Local/Python/pythoncore-3.14-64/Scripts/playwright.exe install:*)",
+      "Bash(python -c \"import anthropic, streamlit, playwright; print\\(''All imports OK''\\)\")",
+      "Bash(C:/Users/noahf/AppData/Local/Python/pythoncore-3.14-64/Scripts/streamlit.exe run:*)",
+      "Bash(python -c \":*)",
+      "Bash(find /c/Users/noahf/Trade -type f -name *.py -o -name *.json -o -name *.config -o -name *.toml)",
+      "WebFetch(domain:docs.robinhood.com)",
+      "Bash(xargs grep:*)",
+      "Bash(find /c/Users/noahf -maxdepth 4 -name *.py)",
+      "Bash(find /c/Users/noahf/Documents /c/Users/noahf/OneDrive /c/Users/noahf/AppData/Roaming -maxdepth 4 -name *.py -o -name .env)",
+      "Bash(python -c \"from core.robinhood import RobinhoodClient; from core.goal_tracker import get_stats; from strategies.income_streams import get_streams; print\\(''All imports OK''\\)\")",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(python generate_keys.py)",
+      "Bash(python verify_keys.py)",
+      "Bash(python debug_api.py)",
+      "Bash(python -m py_compile trading_app.py)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8502)",
+      "Bash(tasklist /fi \"pid eq 8684\")",
+      "Bash(findstr LISTENING)",
+      "Bash(python -m streamlit run trading_app.py --server.port 8502)",
+      "Bash(timeout 5)",
+      "Bash(curl -s -o nul -w \"%{http_code}\" http://localhost:8502)",
+      "Bash(ping -n 6 127.0.0.1)",
+      "Bash(cmd /c \"for /f \"\"tokens=5\"\" %a in \\(''netstat -ano ^| findstr :8502 ^| findstr LISTENING''\\) do taskkill /PID %a /F\")",
+      "Bash(ping -n 8 127.0.0.1)",
+      "Bash(cmd /c \"netstat -ano | findstr :8502\")",
+      "Bash(cmd /c \"netstat -ano | findstr :8502 | findstr LISTENING\")",
+      "Bash(python -m streamlit run trading_app.py --server.port 8510 --server.headless true)",
+      "Bash(ping -n 10 127.0.0.1)",
+      "Bash(curl -s -o nul -w \"%{http_code}\" http://localhost:8510)",
+      "WebFetch(domain:docs.alpaca.markets)",
+      "Bash(python -m py_compile trading_app.py core/strategy_orchestrator.py strategies/cross_platform_rebalancer.py)",
+      "Bash(python -m py_compile trading_app.py core/strategy_orchestrator.py core/risk_manager.py strategies/technical_engine.py strategies/whale_copy.py strategies/sector_rotation.py strategies/pairs_trading.py strategies/earnings_play.py)"
+    ]
+  }
+}

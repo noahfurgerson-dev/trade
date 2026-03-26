@@ -1833,6 +1833,148 @@ if st.session_state.alpaca_client:
     except Exception as e:
         st.warning(f"Alpaca data error: {e}")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# RISK MANAGER + PERFORMANCE ANALYTICS
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">Risk Dashboard & Performance Analytics</div>',
+            unsafe_allow_html=True)
+
+from core.risk_manager import RiskManager
+risk_mgr = RiskManager()
+
+# Record current equity
+current_eq = stats.get("current_equity", 0)
+if current_eq:
+    risk_mgr.record_equity(current_eq)
+
+risk_check  = risk_mgr.check_portfolio_risk(current_eq)
+perf        = risk_mgr.get_performance_metrics(current_eq)
+var_95      = risk_mgr.get_var(current_eq)
+
+# ── Risk alert banner ─────────────────────────────────────────────────────────
+if risk_check["halt"]:
+    st.error(f"🚨 **TRADING HALTED** — {risk_check['halt_reason']}")
+elif risk_check["drawdown"] > 8:
+    st.warning(f"⚠️ Drawdown at {risk_check['drawdown']:.1f}% — approaching {risk_check['drawdown_limit']:.0f}% halt limit")
+else:
+    st.success(f"✅ Risk systems normal — drawdown {risk_check['drawdown']:.1f}%  daily P&L {risk_check['daily_pnl_pct']:+.1f}%")
+
+# ── Risk KPIs ─────────────────────────────────────────────────────────────────
+r1, r2, r3, r4, r5, r6 = st.columns(6)
+
+r1.metric("Drawdown",      f"{risk_check['drawdown']:.1f}%",
+           f"Limit: {risk_check['drawdown_limit']:.0f}%",
+           delta_color="inverse")
+r2.metric("Daily P&L",     f"{risk_check['daily_pnl_pct']:+.1f}%",
+           f"Limit: -{risk_check['daily_loss_limit']:.0f}%",
+           delta_color="normal")
+r3.metric("VaR (95%)",     f"${var_95:,.0f}",   "Max expected daily loss")
+
+if "error" not in perf:
+    r4.metric("Sharpe Ratio",  f"{perf.get('sharpe_ratio',0):.2f}",
+               "≥1.0 = good")
+    r5.metric("Win Rate",      f"{perf.get('win_rate',0):.0f}%",
+               f"{perf.get('total_trades',0)} trades")
+    r6.metric("Annual Return", f"{perf.get('annual_return',0):+.1f}%",
+               f"Max DD: {perf.get('max_drawdown',0):.1f}%")
+else:
+    r4.metric("Sharpe",  "—", "Need 2+ days data")
+    r5.metric("Win Rate","—", "")
+    r6.metric("Annual",  "—", "")
+
+# ── TA Scanner live panel ─────────────────────────────────────────────────────
+if st.session_state.alpaca_client:
+    with st.expander("📊 Live Technical Analysis Scanner", expanded=False):
+        st.caption("RSI + MACD + Bollinger Bands + EMA cross — live scores across 15 stocks")
+        if st.button("Run TA Scan Now", key="ta_scan_btn"):
+            with st.spinner("Scanning 15 stocks..."):
+                from strategies.technical_engine import TechnicalAnalysisStrategy
+                ta = TechnicalAnalysisStrategy(st.session_state.alpaca_client)
+                ta_results = ta.get_scan_report()
+                ta_cols = st.columns([1.2, 1, 1, 1, 1, 1, 1.5])
+                for lbl in ["Symbol","Price","Score","RSI","MACD_H","BB%","Signal"]:
+                    ta_cols[["Symbol","Price","Score","RSI","MACD_H","BB%","Signal"].index(lbl)].markdown(
+                        f"<span style='color:#8b949e;font-size:0.7rem;text-transform:uppercase'>{lbl}</span>",
+                        unsafe_allow_html=True)
+                st.markdown("<hr style='border-color:#21262d;margin:4px 0'>", unsafe_allow_html=True)
+                for r in ta_results:
+                    ta_cols = st.columns([1.2, 1, 1, 1, 1, 1, 1.5])
+                    sc = r["score"]
+                    sc_color = "#3fb950" if sc >= 2 else "#f85149" if sc <= -2 else "#8b949e"
+                    act_color = "#3fb950" if r["action"]=="BUY" else "#f85149" if r["action"]=="SELL" else "#8b949e"
+                    ta_cols[0].markdown(f"<span style='color:#e6edf3;font-weight:700;font-family:monospace'>{r['symbol']}</span>", unsafe_allow_html=True)
+                    ta_cols[1].markdown(f"<span style='color:#8b949e'>${r['price']:,.2f}</span>", unsafe_allow_html=True)
+                    ta_cols[2].markdown(f"<span style='color:{sc_color};font-weight:700'>{sc:+d}</span>", unsafe_allow_html=True)
+                    ta_cols[3].markdown(f"<span style='color:#8b949e'>{r['rsi']:.0f}</span>", unsafe_allow_html=True)
+                    ta_cols[4].markdown(f"<span style='color:#8b949e'>{r['macd_hist']:+.3f}</span>", unsafe_allow_html=True)
+                    ta_cols[5].markdown(f"<span style='color:#8b949e'>{r['bb_pct']:.2f}</span>", unsafe_allow_html=True)
+                    ta_cols[6].markdown(f"<span style='color:{act_color};font-weight:700'>{r['action']}</span>", unsafe_allow_html=True)
+
+    with st.expander("🐋 Whale Copy — Institutional 13F Picks", expanded=False):
+        st.caption("Current holdings of Buffett (Berkshire), Ackman (Pershing), Tepper (Appaloosa)")
+        from strategies.whale_copy import WhaleCopyStrategy
+        wc = WhaleCopyStrategy(st.session_state.alpaca_client)
+        picks = wc.get_picks_report()
+        w_cols = st.columns([1, 1.5, 1.2, 2.5, 1])
+        for lbl in ["Symbol","Fund","Conviction","Rationale","Action"]:
+            w_cols[["Symbol","Fund","Conviction","Rationale","Action"].index(lbl)].markdown(
+                f"<span style='color:#8b949e;font-size:0.7rem;text-transform:uppercase'>{lbl}</span>",
+                unsafe_allow_html=True)
+        st.markdown("<hr style='border-color:#21262d;margin:4px 0'>", unsafe_allow_html=True)
+        for p in picks:
+            w_cols = st.columns([1, 1.5, 1.2, 2.5, 1])
+            conv_c = "#3fb950" if p["conviction"]=="HIGH" else "#f0883e"
+            act_c  = "#3fb950" if p["action"]=="BUY" else "#8b949e"
+            w_cols[0].markdown(f"<span style='color:#58a6ff;font-weight:700;font-family:monospace'>{p['symbol']}</span>", unsafe_allow_html=True)
+            w_cols[1].markdown(f"<span style='color:#8b949e;font-size:0.8rem'>{p['fund']}</span>", unsafe_allow_html=True)
+            w_cols[2].markdown(f"<span style='color:{conv_c};font-size:0.8rem;font-weight:700'>{p['conviction']}</span>", unsafe_allow_html=True)
+            w_cols[3].markdown(f"<span style='color:#8b949e;font-size:0.78rem'>{p['rationale']}</span>", unsafe_allow_html=True)
+            w_cols[4].markdown(f"<span style='color:{act_c};font-weight:700'>{p['action']}</span>", unsafe_allow_html=True)
+
+    with st.expander("🔄 Sector Rotation & Pairs Trading Scanner", expanded=False):
+        sr_col, pt_col = st.columns(2)
+        with sr_col:
+            st.caption("**Sector Momentum Ranking (20-day)**")
+            if st.button("Rank Sectors", key="sector_scan"):
+                from strategies.sector_rotation import SectorRotationStrategy
+                sr = SectorRotationStrategy(st.session_state.alpaca_client)
+                ranked = sr.get_sector_report()
+                for i, r in enumerate(ranked):
+                    bar_w = min(abs(r["momentum"]) * 3, 100)
+                    color = "#3fb950" if r["momentum"] > 0 else "#f85149"
+                    top_tag = " 🏆" if i < 3 else (" ⬇️" if i >= len(ranked)-2 else "")
+                    st.markdown(f"""
+                    <div style="margin:4px 0">
+                      <div style="display:flex;justify-content:space-between">
+                        <span style="color:#e6edf3;font-size:0.8rem;font-weight:600">{r['symbol']} {r['name']}{top_tag}</span>
+                        <span style="color:{color};font-size:0.8rem;font-weight:700">{r['momentum']:+.1f}%</span>
+                      </div>
+                      <div style="background:#21262d;border-radius:4px;height:4px;margin-top:2px">
+                        <div style="width:{bar_w}%;height:100%;background:{color};border-radius:4px"></div>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+        with pt_col:
+            st.caption("**Pairs Z-Score (Statistical Arb)**")
+            if st.button("Scan Pairs", key="pairs_scan"):
+                from strategies.pairs_trading import PairsTradingStrategy
+                pt = PairsTradingStrategy(st.session_state.alpaca_client)
+                pairs = pt.get_pairs_report()
+                for p in pairs:
+                    if "error" in p:
+                        continue
+                    z = p["z_score"]
+                    z_color = "#f85149" if abs(z) > 2 else "#f0883e" if abs(z) > 1 else "#8b949e"
+                    act_color = "#3fb950" if p["action"] in ("BUY_A","BUY_B") else (
+                                "#f85149" if p["action"]=="EXIT" else "#8b949e")
+                    st.markdown(f"""
+                    <div style="background:#161b27;border-radius:6px;padding:6px 10px;margin:3px 0;
+                                display:flex;justify-content:space-between">
+                      <span style="color:#8b949e;font-size:0.78rem">{p['label']}</span>
+                      <span style="color:{z_color};font-weight:700;font-size:0.78rem">z={z:+.2f}</span>
+                      <span style="color:{act_color};font-size:0.78rem;font-weight:700">{p['action']}</span>
+                    </div>""", unsafe_allow_html=True)
+
 # ── Opportunity Map ────────────────────────────────────────────────────────────
 
 st.markdown('<div class="section-title">Revenue Opportunity Map</div>', unsafe_allow_html=True)

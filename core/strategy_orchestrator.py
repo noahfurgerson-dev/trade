@@ -47,22 +47,27 @@ MIN_SCORE_THRESHOLD = 30
 
 # How long to wait before running a strategy again (minutes)
 COOLDOWN_MINUTES = {
-    "momentum":       30,
-    "mean_reversion": 30,
-    "dca":            720,    # 12 hours
-    "fear_greed":     240,    # 4 hours
-    "trending":       120,    # 2 hours
-    "ai_signals":     180,    # 3 hours — API cost conscious
+    "momentum":                   30,
+    "mean_reversion":             30,
+    "dca":                       720,    # 12 hours
+    "fear_greed":                240,    # 4 hours
+    "trending":                  120,    # 2 hours
+    "ai_signals":                180,    # 3 hours — API cost conscious
     "rebalancer":                360,    # 6 hours
     "cross_platform_rebalancer": 240,    # 4 hours
     "stock_momentum":             60,
-    "dividend":       1440,   # 24 hours
-    "options_income": 1440,
-    "treasury":       1440,
+    "dividend":                 1440,    # 24 hours
+    "options_income":           1440,
+    "treasury":                 1440,
+    "technical_analysis":         45,    # 45 min
+    "whale_copy":               1440,    # 24 hours — 13F quarterly
+    "sector_rotation":           480,    # 8 hours
+    "pairs_trading":              60,    # 1 hour
+    "earnings_play":             120,    # 2 hours
 }
 
 # Max strategies to run per cycle (avoids decision paralysis + cost)
-MAX_STRATEGIES_PER_CYCLE = 4
+MAX_STRATEGIES_PER_CYCLE = 5
 
 # State file for cooldowns and history
 STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "orchestrator_state.json")
@@ -420,6 +425,74 @@ class StrategyOrchestrator:
 
         return min(score, 100), "; ".join(reasons)
 
+    def _score_technical_analysis(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["alpaca_configured"]:
+            return 0, "Alpaca not configured"
+        if not ctx["market_open"]:
+            return 5, "Market closed — TA deferred"
+        score   = 55
+        reasons = ["Multi-indicator confluence provides high-quality signals"]
+        if 14 <= ctx["hour"] <= 20:
+            score += 15
+            reasons.append("Active US session — optimal for TA signals")
+        fg = ctx["fear_greed"]
+        if fg < 30 or fg > 70:
+            score += 10
+            reasons.append(f"Extreme F&G ({fg}) increases signal clarity")
+        return min(score, 100), "; ".join(reasons)
+
+    def _score_whale_copy(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["alpaca_configured"]:
+            return 0, "Alpaca not configured"
+        if not ctx["market_open"]:
+            return 5, "Market closed — whale copy deferred"
+        score   = 50
+        reasons = ["Mirrors Buffett/Ackman/Tepper 13F conviction picks"]
+        if ctx["cash_pct"] > 15:
+            score += 20
+            reasons.append(f"Good cash level {ctx['cash_pct']:.0f}% to deploy into institutional picks")
+        return min(score, 100), "; ".join(reasons)
+
+    def _score_sector_rotation(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["alpaca_configured"]:
+            return 0, "Alpaca not configured"
+        if not ctx["market_open"]:
+            return 5, "Market closed"
+        score   = 50
+        reasons = ["Sector rotation captures economic cycle momentum"]
+        fg = ctx["fear_greed"]
+        if fg >= 60:
+            score += 15
+            reasons.append("Risk-on environment favours sector momentum")
+        elif fg <= 30:
+            score += 10
+            reasons.append("Rotation into defensive sectors (XLV, XLU)")
+        return min(score, 100), "; ".join(reasons)
+
+    def _score_pairs_trading(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["alpaca_configured"]:
+            return 0, "Alpaca not configured"
+        if not ctx["market_open"]:
+            return 5, "Market closed"
+        score   = 45
+        reasons = ["Statistical arbitrage is market-neutral — works in any environment"]
+        if 45 <= ctx["fear_greed"] <= 65:
+            score += 10
+            reasons.append("Neutral market ideal for mean-reversion pairs")
+        return min(score, 100), "; ".join(reasons)
+
+    def _score_earnings_play(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["alpaca_configured"]:
+            return 0, "Alpaca not configured"
+        if not ctx["market_open"]:
+            return 5, "Market closed"
+        score   = 55
+        reasons = ["Earnings plays exploit pre-drift and post-earnings momentum"]
+        if ctx["fear_greed"] >= 50:
+            score += 15
+            reasons.append("Positive sentiment amplifies earnings beats")
+        return min(score, 100), "; ".join(reasons)
+
     # ── Main orchestration ─────────────────────────────────────────────────────
 
     def _is_on_cooldown(self, strategy_name: str) -> tuple[bool, str]:
@@ -451,18 +524,26 @@ class StrategyOrchestrator:
         )
 
         scorers = {
-            "momentum":               self._score_momentum,
-            "mean_reversion":         self._score_mean_reversion,
-            "dca":                    self._score_dca,
-            "fear_greed":             self._score_fear_greed,
-            "trending":               self._score_trending,
-            "ai_signals":             self._score_ai_signals,
-            "rebalancer":             self._score_rebalancer,
-            "cross_platform_rebalancer": self._score_cross_platform_rebalancer,
-            "stock_momentum":         self._score_stock_momentum,
-            "dividend":               self._score_dividend,
-            "options_income":         self._score_options_income,
-            "treasury":               self._score_treasury,
+            # Crypto — Robinhood
+            "momentum":                   self._score_momentum,
+            "mean_reversion":             self._score_mean_reversion,
+            "dca":                        self._score_dca,
+            "fear_greed":                 self._score_fear_greed,
+            "trending":                   self._score_trending,
+            "ai_signals":                 self._score_ai_signals,
+            "rebalancer":                 self._score_rebalancer,
+            # Cross-platform
+            "cross_platform_rebalancer":  self._score_cross_platform_rebalancer,
+            # Stocks — Alpaca
+            "stock_momentum":             self._score_stock_momentum,
+            "technical_analysis":         self._score_technical_analysis,
+            "sector_rotation":            self._score_sector_rotation,
+            "pairs_trading":              self._score_pairs_trading,
+            "earnings_play":              self._score_earnings_play,
+            "whale_copy":                 self._score_whale_copy,
+            "dividend":                   self._score_dividend,
+            "options_income":             self._score_options_income,
+            "treasury":                   self._score_treasury,
         }
 
         results = []
@@ -556,41 +637,37 @@ class StrategyOrchestrator:
         from strategies.options_income          import OptionsIncomeStrategy
         from strategies.treasury_income         import TreasuryIncomeStrategy
         from strategies.cross_platform_rebalancer import CrossPlatformRebalancer
+        from strategies.technical_engine         import TechnicalAnalysisStrategy
+        from strategies.whale_copy               import WhaleCopyStrategy
+        from strategies.sector_rotation          import SectorRotationStrategy
+        from strategies.pairs_trading            import PairsTradingStrategy
+        from strategies.earnings_play            import EarningsPlayStrategy
 
         # Build strategy instances (lazy — only for selected)
         def _build(name: str):
             """Instantiate a strategy by name."""
-            if name == "momentum"       and self.rh:
-                return MomentumStrategy(self.rh)
-            if name == "mean_reversion" and self.rh:
-                return MeanReversionStrategy(self.rh)
-            if name == "dca"            and self.rh:
-                return DCAStrategy(self.rh)
-            if name == "fear_greed"     and self.rh:
-                return FearGreedStrategy(self.rh)
-            if name == "trending"       and self.rh:
-                return TrendingScannerStrategy(self.rh)
-            if name == "ai_signals"     and self.rh:
-                return AISignalStrategy(self.rh)
-            if name == "rebalancer"     and self.rh:
-                return RebalancerStrategy(self.rh)
-            if name == "cross_platform_rebalancer":
-                return CrossPlatformRebalancer(self.rh, self.alpaca)
-            if name == "stock_momentum" and self.alpaca:
-                return StockMomentumStrategy(self.alpaca)
-            if name == "dividend"       and self.alpaca:
-                return DividendCollectorStrategy(self.alpaca)
-            if name == "options_income" and self.alpaca:
-                return OptionsIncomeStrategy(self.alpaca)
-            if name == "treasury"       and self.alpaca:
-                return TreasuryIncomeStrategy(self.alpaca)
+            if name == "momentum"              and self.rh:     return MomentumStrategy(self.rh)
+            if name == "mean_reversion"        and self.rh:     return MeanReversionStrategy(self.rh)
+            if name == "dca"                   and self.rh:     return DCAStrategy(self.rh)
+            if name == "fear_greed"            and self.rh:     return FearGreedStrategy(self.rh)
+            if name == "trending"              and self.rh:     return TrendingScannerStrategy(self.rh)
+            if name == "ai_signals"            and self.rh:     return AISignalStrategy(self.rh)
+            if name == "rebalancer"            and self.rh:     return RebalancerStrategy(self.rh)
+            if name == "cross_platform_rebalancer":             return CrossPlatformRebalancer(self.rh, self.alpaca)
+            if name == "stock_momentum"        and self.alpaca: return StockMomentumStrategy(self.alpaca)
+            if name == "technical_analysis"    and self.alpaca: return TechnicalAnalysisStrategy(self.alpaca)
+            if name == "sector_rotation"       and self.alpaca: return SectorRotationStrategy(self.alpaca)
+            if name == "pairs_trading"         and self.alpaca: return PairsTradingStrategy(self.alpaca)
+            if name == "earnings_play"         and self.alpaca: return EarningsPlayStrategy(self.alpaca)
+            if name == "whale_copy"            and self.alpaca: return WhaleCopyStrategy(self.alpaca)
+            if name == "dividend"              and self.alpaca: return DividendCollectorStrategy(self.alpaca)
+            if name == "options_income"        and self.alpaca: return OptionsIncomeStrategy(self.alpaca)
+            if name == "treasury"              and self.alpaca: return TreasuryIncomeStrategy(self.alpaca)
             return None
 
-        # Execute: SELL strategies first, then BUY strategies
-        sell_priority = ["cross_platform_rebalancer", "rebalancer", "mean_reversion",
-                          "fear_greed", "momentum"]
-        buy_priority  = ["dca", "trending", "ai_signals", "fear_greed",
-                          "dividend", "treasury", "options_income", "stock_momentum"]
+        # Execute: SELL strategies first (free up cash), then BUY
+        sell_priority = ["cross_platform_rebalancer", "rebalancer", "sector_rotation",
+                          "mean_reversion", "fear_greed", "momentum", "pairs_trading"]
 
         ordered = (
             [r for r in selected if r["name"] in sell_priority] +
