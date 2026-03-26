@@ -38,7 +38,10 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from strategies.base import BaseStrategy
 
-load_dotenv(override=True)   # ensure .env is loaded even when called as a module
+# Load .env using an explicit path anchored to this file's location,
+# so it works regardless of the working directory Streamlit uses.
+_ENV_PATH = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=_ENV_PATH, override=True)
 
 # ── Watched tickers ───────────────────────────────────────────────────────────
 
@@ -367,6 +370,9 @@ def ai_deep_analysis(articles: list[dict], portfolio_context: str = "") -> dict:
     Send top headlines to Claude for deep market analysis.
     Returns structured signals dict.
     """
+    # Re-load .env at call time — guarantees the key is present even if
+    # the module was imported before dotenv had a chance to run.
+    load_dotenv(dotenv_path=_ENV_PATH, override=True)
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         return {"error": "No Anthropic API key"}
