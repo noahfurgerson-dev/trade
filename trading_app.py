@@ -130,6 +130,11 @@ def init_state():
         "orch_cadence_minutes": 30,      # how often to fire
         "last_orch_run": None,           # datetime of last auto-run
         "orch_run_count": 0,             # total auto-runs this session
+        # ── News Sentiment ─────────────────────────────────────────
+        "news_articles":   [],
+        "news_signals":    {},
+        "news_fetched_at": None,
+        "news_ai_result":  {},
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1974,6 +1979,236 @@ if st.session_state.alpaca_client:
                       <span style="color:{z_color};font-weight:700;font-size:0.78rem">z={z:+.2f}</span>
                       <span style="color:{act_color};font-size:0.78rem;font-weight:700">{p['action']}</span>
                     </div>""", unsafe_allow_html=True)
+
+# ── News Sentiment Feed ────────────────────────────────────────────────────────
+
+st.markdown('<div class="section-title">📰 News Sentiment Engine</div>', unsafe_allow_html=True)
+st.caption("Live news feed from Reuters, CNBC, CoinDesk, Reddit & more — scored for market impact.")
+
+with st.expander("📰 Live News Feed & Sentiment Signals", expanded=False):
+    news_col1, news_col2 = st.columns([2, 1])
+
+    with news_col1:
+        st.caption("**Real-Time Headlines**")
+        if st.button("🔄 Fetch Latest News", key="fetch_news"):
+            with st.spinner("Scraping 8 news sources + Reddit..."):
+                try:
+                    from strategies.news_sentiment import fetch_all_news, analyse_articles, aggregate_ticker_signals
+                    articles  = fetch_all_news(use_cache=False)  # Force refresh
+                    enriched  = analyse_articles(articles)
+                    signals   = aggregate_ticker_signals(enriched)
+                    st.session_state["news_articles"] = enriched
+                    st.session_state["news_signals"]  = signals
+                    st.session_state["news_fetched_at"] = datetime.now().strftime("%H:%M:%S")
+                    st.success(f"Fetched {len(articles)} articles from {len(set(a['source'] for a in articles))} sources")
+                except Exception as e:
+                    st.error(f"News fetch error: {e}")
+
+        if st.session_state.get("news_fetched_at"):
+            st.caption(f"Last fetched: {st.session_state['news_fetched_at']}")
+
+        articles_to_show = st.session_state.get("news_articles", [])
+        if articles_to_show:
+            # Filter controls
+            filter_col1, filter_col2 = st.columns(2)
+            with filter_col1:
+                sentiment_filter = st.selectbox(
+                    "Filter by sentiment", ["All", "Bullish only", "Bearish only", "Neutral"],
+                    key="news_sentiment_filter"
+                )
+            with filter_col2:
+                source_options = ["All sources"] + sorted(list(set(a["source"] for a in articles_to_show)))
+                source_filter = st.selectbox("Filter by source", source_options, key="news_source_filter")
+
+            filtered = articles_to_show
+            if sentiment_filter == "Bullish only":
+                filtered = [a for a in filtered if a.get("sentiment", 0) > 0.3]
+            elif sentiment_filter == "Bearish only":
+                filtered = [a for a in filtered if a.get("sentiment", 0) < -0.3]
+            elif sentiment_filter == "Neutral":
+                filtered = [a for a in filtered if -0.3 <= a.get("sentiment", 0) <= 0.3]
+            if source_filter != "All sources":
+                filtered = [a for a in filtered if a.get("source") == source_filter]
+
+            st.caption(f"Showing {min(30, len(filtered))} of {len(filtered)} articles")
+
+            for art in filtered[:30]:
+                s  = art.get("sentiment", 0)
+                if s >= 0.8:
+                    border_color = "#3fb950"
+                    sentiment_label = f"+{s:.1f} 🟢"
+                elif s <= -0.8:
+                    border_color = "#f85149"
+                    sentiment_label = f"{s:.1f} 🔴"
+                elif s > 0:
+                    border_color = "#56d364"
+                    sentiment_label = f"+{s:.1f} 🟡"
+                elif s < 0:
+                    border_color = "#e3b341"
+                    sentiment_label = f"{s:.1f} 🟠"
+                else:
+                    border_color = "#30363d"
+                    sentiment_label = "0.0 ⚪"
+
+                tickers_html = ""
+                for t in art.get("tickers", [])[:4]:
+                    tickers_html += f'<span style="background:#21262d;color:#58a6ff;font-size:0.65rem;padding:1px 5px;border-radius:3px;margin-right:3px">{t}</span>'
+
+                src_badge = f'<span style="background:#161b27;color:#8b949e;font-size:0.65rem;padding:1px 6px;border-radius:3px">{art["source"][:20]}</span>'
+
+                st.markdown(f"""
+                <div style="background:#0d1117;border-left:3px solid {border_color};
+                            border-radius:4px;padding:8px 12px;margin:4px 0">
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+                    <div style="flex:1">
+                      <div style="color:#e6edf3;font-size:0.8rem;font-weight:500;line-height:1.3">{art['title'][:120]}</div>
+                      <div style="margin-top:4px">{src_badge} {tickers_html}</div>
+                    </div>
+                    <div style="text-align:right;white-space:nowrap">
+                      <div style="color:#8b949e;font-size:0.72rem;font-weight:700">{sentiment_label}</div>
+                    </div>
+                  </div>
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.info("Click **Fetch Latest News** to load headlines from all sources.")
+
+    with news_col2:
+        st.caption("**Ticker Sentiment Heatmap**")
+        ticker_signals = st.session_state.get("news_signals", {})
+        if ticker_signals:
+            # Sort by absolute avg_score
+            sorted_tickers = sorted(
+                ticker_signals.items(),
+                key=lambda x: abs(x[1].get("avg_score", 0)),
+                reverse=True
+            )
+            for sym, sig in sorted_tickers[:20]:
+                avg  = sig.get("avg_score", 0)
+                cnt  = sig.get("count", 0)
+                bar_pct = min(abs(avg) / 3.0 * 100, 100)
+
+                if avg >= 1.5:
+                    bar_color = "#3fb950"
+                    signal_tag = "BUY"
+                    tag_color  = "#3fb950"
+                elif avg >= 0.5:
+                    bar_color = "#56d364"
+                    signal_tag = "WATCH"
+                    tag_color  = "#56d364"
+                elif avg <= -1.5:
+                    bar_color = "#f85149"
+                    signal_tag = "SELL"
+                    tag_color  = "#f85149"
+                elif avg <= -0.5:
+                    bar_color = "#e3b341"
+                    signal_tag = "CAUTION"
+                    tag_color  = "#e3b341"
+                else:
+                    bar_color = "#8b949e"
+                    signal_tag = "NEUTRAL"
+                    tag_color  = "#8b949e"
+
+                st.markdown(f"""
+                <div style="margin:3px 0">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <span style="color:#e6edf3;font-size:0.78rem;font-weight:700;width:60px">{sym}</span>
+                    <span style="color:{tag_color};font-size:0.65rem;font-weight:700;width:55px;text-align:center">{signal_tag}</span>
+                    <span style="color:#8b949e;font-size:0.68rem;width:35px;text-align:right">{cnt}art</span>
+                    <span style="color:{bar_color};font-size:0.72rem;font-weight:700;width:40px;text-align:right">{avg:+.2f}</span>
+                  </div>
+                  <div style="background:#21262d;border-radius:3px;height:3px;margin-top:2px">
+                    <div style="width:{bar_pct:.0f}%;height:100%;background:{bar_color};border-radius:3px"></div>
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
+            # Top buy signals call-out
+            buy_signals  = [(s, d) for s, d in sorted_tickers if d.get("avg_score", 0) >= 1.5]
+            sell_signals = [(s, d) for s, d in sorted_tickers if d.get("avg_score", 0) <= -1.5]
+            if buy_signals:
+                st.markdown("---")
+                st.caption("**Strong BUY signals**")
+                for sym, sig in buy_signals[:3]:
+                    st.markdown(
+                        f'<div style="color:#3fb950;font-weight:700;font-size:0.8rem">'
+                        f'🟢 {sym} — score {sig["avg_score"]:+.2f} ({sig["count"]} articles)</div>',
+                        unsafe_allow_html=True
+                    )
+            if sell_signals:
+                if not buy_signals:
+                    st.markdown("---")
+                st.caption("**Strong SELL signals**")
+                for sym, sig in sell_signals[:3]:
+                    st.markdown(
+                        f'<div style="color:#f85149;font-weight:700;font-size:0.8rem">'
+                        f'🔴 {sym} — score {sig["avg_score"]:+.2f} ({sig["count"]} articles)</div>',
+                        unsafe_allow_html=True
+                    )
+        else:
+            st.info("Fetch news to see ticker sentiment scores.")
+
+        # Claude AI deep analysis section
+        st.markdown("---")
+        st.caption("**Claude AI Market Analysis**")
+        if st.button("Run AI Analysis", key="run_ai_news"):
+            articles_for_ai = st.session_state.get("news_articles", [])
+            if not articles_for_ai:
+                st.warning("Fetch news first before running AI analysis.")
+            else:
+                with st.spinner("Asking Claude to analyse headlines..."):
+                    try:
+                        from strategies.news_sentiment import ai_deep_analysis, ALL_TICKERS
+                        portfolio_ctx = f"Watching: {', '.join(ALL_TICKERS)}"
+                        ai_result = ai_deep_analysis(articles_for_ai, portfolio_ctx)
+                        st.session_state["news_ai_result"] = ai_result
+                    except Exception as e:
+                        st.error(f"AI analysis error: {e}")
+
+        ai_result = st.session_state.get("news_ai_result", {})
+        if ai_result and "error" not in ai_result:
+            risk = ai_result.get("risk_level", "medium")
+            risk_color = {"low": "#3fb950", "medium": "#f0883e", "high": "#f85149"}.get(risk, "#8b949e")
+
+            st.markdown(f"""
+            <div style="background:#161b27;border-radius:8px;padding:10px 12px;margin-top:6px">
+              <div style="color:#58a6ff;font-size:0.75rem;font-weight:700;margin-bottom:6px">AI MARKET READ</div>
+              <div style="color:#e6edf3;font-size:0.78rem;line-height:1.4">{ai_result.get('market_summary','')}</div>
+              <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+                <span style="color:#8b949e;font-size:0.68rem">Risk:</span>
+                <span style="color:{risk_color};font-weight:700;font-size:0.72rem">{risk.upper()}</span>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            signals_list = ai_result.get("signals", [])
+            if signals_list:
+                st.caption("**AI Trade Signals**")
+                for sig in signals_list:
+                    action = sig.get("action", "HOLD")
+                    conf   = sig.get("confidence", 0)
+                    act_color = "#3fb950" if action == "BUY" else "#f85149" if action == "SELL" else "#8b949e"
+                    st.markdown(f"""
+                    <div style="background:#0d1117;border-left:2px solid {act_color};
+                                padding:5px 9px;border-radius:3px;margin:3px 0">
+                      <div style="display:flex;justify-content:space-between">
+                        <span style="color:#e6edf3;font-weight:700;font-size:0.78rem">{sig.get('ticker','?')}</span>
+                        <span style="color:{act_color};font-weight:700;font-size:0.75rem">{action} {conf:.0%}</span>
+                      </div>
+                      <div style="color:#8b949e;font-size:0.7rem;margin-top:2px">{sig.get('rationale','')[:70]}</div>
+                    </div>""", unsafe_allow_html=True)
+
+            opp = ai_result.get("top_opportunities", [])
+            risks = ai_result.get("top_risks", [])
+            if opp:
+                st.markdown(
+                    f'<div style="margin-top:6px;color:#3fb950;font-size:0.72rem">🎯 Opportunities: {", ".join(opp)}</div>',
+                    unsafe_allow_html=True
+                )
+            if risks:
+                st.markdown(
+                    f'<div style="color:#f85149;font-size:0.72rem">⚠️ Risks: {", ".join(risks)}</div>',
+                    unsafe_allow_html=True
+                )
+        elif ai_result.get("error"):
+            st.warning(f"AI: {ai_result['error']}")
 
 # ── Opportunity Map ────────────────────────────────────────────────────────────
 

@@ -33,6 +33,7 @@ Strategies known to the orchestrator:
   dividend          Dividend ETF accumulation
   options_income    Covered calls + CSPs
   treasury          T-Bill/bond yield on idle cash
+  news_sentiment    Reuters/CNBC/Reddit scraping + Claude AI signals
 """
 
 import json
@@ -64,6 +65,7 @@ COOLDOWN_MINUTES = {
     "sector_rotation":           480,    # 8 hours
     "pairs_trading":              60,    # 1 hour
     "earnings_play":             120,    # 2 hours
+    "news_sentiment":             30,    # 30 min — RSS cache is 15 min
 }
 
 # Max strategies to run per cycle (avoids decision paralysis + cost)
@@ -481,6 +483,35 @@ class StrategyOrchestrator:
             reasons.append("Neutral market ideal for mean-reversion pairs")
         return min(score, 100), "; ".join(reasons)
 
+    def _score_news_sentiment(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["rh_configured"] and not ctx["alpaca_configured"]:
+            return 0, "No platform configured"
+        score   = 55
+        reasons = ["News sentiment provides real-time edge on market-moving events"]
+
+        # Higher value when market is open (actionable signals)
+        if ctx["market_open"]:
+            score += 15
+            reasons.append("Market open — news signals immediately actionable")
+
+        fg = ctx["fear_greed"]
+        if fg <= 25 or fg >= 80:
+            score += 15
+            reasons.append(f"Extreme market sentiment ({fg}) — news catalysts have outsized impact")
+        elif fg <= 40 or fg >= 65:
+            score += 8
+            reasons.append(f"Directional market ({fg}) — news amplifies existing trend")
+
+        # Very useful when cash available to act on buy signals
+        if ctx["cash_pct"] > 15:
+            score += 10
+            reasons.append(f"Good cash level {ctx['cash_pct']:.0f}% to act on buy signals")
+        elif ctx["cash_pct"] < 5:
+            score -= 15
+            reasons.append("Low cash — buy signals may not execute")
+
+        return min(score, 100), "; ".join(reasons)
+
     def _score_earnings_play(self, ctx: dict) -> tuple[int, str]:
         if not ctx["alpaca_configured"]:
             return 0, "Alpaca not configured"
@@ -544,6 +575,8 @@ class StrategyOrchestrator:
             "dividend":                   self._score_dividend,
             "options_income":             self._score_options_income,
             "treasury":                   self._score_treasury,
+            # News / AI
+            "news_sentiment":             self._score_news_sentiment,
         }
 
         results = []
@@ -642,6 +675,7 @@ class StrategyOrchestrator:
         from strategies.sector_rotation          import SectorRotationStrategy
         from strategies.pairs_trading            import PairsTradingStrategy
         from strategies.earnings_play            import EarningsPlayStrategy
+        from strategies.news_sentiment           import NewsSentimentStrategy
 
         # Build strategy instances (lazy — only for selected)
         def _build(name: str):
@@ -663,6 +697,7 @@ class StrategyOrchestrator:
             if name == "dividend"              and self.alpaca: return DividendCollectorStrategy(self.alpaca)
             if name == "options_income"        and self.alpaca: return OptionsIncomeStrategy(self.alpaca)
             if name == "treasury"              and self.alpaca: return TreasuryIncomeStrategy(self.alpaca)
+            if name == "news_sentiment":                        return NewsSentimentStrategy(self.rh, self.alpaca)
             return None
 
         # Execute: SELL strategies first (free up cash), then BUY
