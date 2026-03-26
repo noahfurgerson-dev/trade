@@ -35,7 +35,10 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
 from strategies.base import BaseStrategy
+
+load_dotenv(override=True)   # ensure .env is loaded even when called as a module
 
 # ── Watched tickers ───────────────────────────────────────────────────────────
 
