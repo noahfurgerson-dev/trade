@@ -125,6 +125,11 @@ def init_state():
         "orch_result": None,
         "orch_evaluation": [],
         "intelligence_tab": "Orchestrator",
+        # ── Scheduler ──────────────────────────────────────────────
+        "auto_orchestrate": False,       # master on/off switch
+        "orch_cadence_minutes": 30,      # how often to fire
+        "last_orch_run": None,           # datetime of last auto-run
+        "orch_run_count": 0,             # total auto-runs this session
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -400,8 +405,63 @@ with st.sidebar:
             st.warning("Connect to Robinhood first")
 
     st.markdown("---")
-    auto = st.toggle("Auto-Refresh (30s)", value=st.session_state.auto_refresh)
-    st.session_state.auto_refresh = auto
+    st.markdown("### Auto-Orchestrator")
+
+    auto_orch = st.toggle(
+        "Run Automatically",
+        value=st.session_state.auto_orchestrate,
+        help="Runs the orchestrator on the selected cadence. Keep this tab open.",
+    )
+    st.session_state.auto_orchestrate = auto_orch
+
+    cadence_label = st.selectbox(
+        "Cadence",
+        options=["Every 15 min", "Every 30 min", "Every 1 hour", "Every 2 hours", "Every 4 hours"],
+        index=["Every 15 min", "Every 30 min", "Every 1 hour", "Every 2 hours", "Every 4 hours"].index(
+            {15: "Every 15 min", 30: "Every 30 min", 60: "Every 1 hour",
+             120: "Every 2 hours", 240: "Every 4 hours"}.get(
+                st.session_state.orch_cadence_minutes, "Every 30 min")),
+        disabled=not auto_orch,
+    )
+    cadence_map = {
+        "Every 15 min": 15, "Every 30 min": 30, "Every 1 hour": 60,
+        "Every 2 hours": 120, "Every 4 hours": 240,
+    }
+    st.session_state.orch_cadence_minutes = cadence_map[cadence_label]
+
+    # ── Countdown display ────────────────────────────────────────
+    if auto_orch and st.session_state.last_orch_run:
+        elapsed   = (datetime.now() - st.session_state.last_orch_run).total_seconds()
+        remaining = max(0, st.session_state.orch_cadence_minutes * 60 - elapsed)
+        mins_left = int(remaining // 60)
+        secs_left = int(remaining % 60)
+        bar_pct   = 1 - (remaining / (st.session_state.orch_cadence_minutes * 60))
+        st.markdown(f"""
+        <div style="margin-top:8px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="color:#8b949e;font-size:0.75rem">Next run in</span>
+            <span style="color:#58a6ff;font-size:0.75rem;font-weight:700">
+              {mins_left:02d}:{secs_left:02d}
+            </span>
+          </div>
+          <div style="background:#21262d;border-radius:999px;height:5px">
+            <div style="width:{min(bar_pct*100,100):.1f}%;height:100%;
+                        background:linear-gradient(90deg,#58a6ff,#3fb950);
+                        border-radius:999px"></div>
+          </div>
+          <div style="color:#4d5566;font-size:0.7rem;margin-top:4px">
+            Runs: {st.session_state.orch_run_count} this session &nbsp;·&nbsp;
+            Last: {st.session_state.last_orch_run.strftime('%H:%M:%S')}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    elif auto_orch:
+        st.caption("🟡 First run will fire shortly...")
+
+    st.markdown("---")
+    auto = st.toggle("Page Refresh (30s)", value=st.session_state.auto_refresh,
+                     help="Keeps the page live so the scheduler can fire. Enable with Auto-Orchestrator.")
+    st.session_state.auto_refresh = auto_orch or auto   # always refresh when scheduler is on
 
 # ── Main dashboard ─────────────────────────────────────────────────────────────
 
@@ -1321,7 +1381,43 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Auto-refresh ───────────────────────────────────────────────────────────────
+# ── Scheduler engine ───────────────────────────────────────────────────────────
+
+def _should_run_orchestrator() -> bool:
+    """Return True if the cadence has elapsed since the last auto-run."""
+    if not st.session_state.auto_orchestrate:
+        return False
+    last = st.session_state.last_orch_run
+    if last is None:
+        return True   # Never run — fire immediately
+    elapsed_mins = (datetime.now() - last).total_seconds() / 60
+    return elapsed_mins >= st.session_state.orch_cadence_minutes
+
+if _should_run_orchestrator():
+    if not st.session_state.demo_mode:
+        with st.spinner(
+            f"⚙️ Auto-Orchestrator firing "
+            f"(run #{st.session_state.orch_run_count + 1})..."
+        ):
+            from core.strategy_orchestrator import StrategyOrchestrator
+            rh     = st.session_state.client if st.session_state.logged_in else None
+            alpaca = st.session_state.alpaca_client
+            if rh or alpaca:
+                orch   = StrategyOrchestrator(rh_client=rh, alpaca_client=alpaca)
+                result = orch.run(dry_run=False)
+                for entry in result["decision_log"]:
+                    st.session_state.strategy_log.insert(0, {
+                        "time":  entry["time"],
+                        "msg":   f"[AUTO] {entry['msg']}",
+                        "level": entry["level"],
+                    })
+                st.session_state.orch_result     = result
+                st.session_state.orch_evaluation = result["evaluation"]
+    # Always update the timer (even in demo mode, so countdown works)
+    st.session_state.last_orch_run  = datetime.now()
+    st.session_state.orch_run_count += 1
+
+# ── Page auto-refresh (keeps scheduler alive) ──────────────────────────────────
 
 if st.session_state.auto_refresh:
     time.sleep(30)
