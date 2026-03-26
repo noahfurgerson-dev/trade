@@ -139,36 +139,76 @@ class RobinhoodClient:
     # ── Holdings ───────────────────────────────────────────────────────
 
     def get_holdings(self) -> list[dict]:
-        """All crypto holdings with current value."""
+        """All crypto holdings with current value and P&L."""
         try:
             data = self._get("/api/v1/crypto/trading/holdings/")
             results = data.get("results", [])
+
+            # Log raw fields on first result so we can verify API field names
+            if results:
+                print(f"[RH Holdings] raw fields: {list(results[0].keys())}")
+                print(f"[RH Holdings] sample:     {results[0]}")
+
             enriched = []
             for h in results:
                 symbol = h.get("asset_code", "")
-                qty = float(h.get("total_quantity", 0) or 0)
+                qty    = float(h.get("total_quantity", 0) or 0)
                 if qty == 0:
                     continue
-                cost_held = float(h.get("quantity_available_for_trading", 0) or 0)
-                avg_price = float(h.get("cost_held", 0) or 0) / qty if qty else 0
-                # Get current price
-                pair = f"{symbol}-USD"
+
+                # ── Cost basis: try every field name Robinhood may use ───────
+                # The official API uses "cost_held"; older endpoints used
+                # "average_buy_price" (per-unit) or "equity_cost" (total).
+                cost_basis = (
+                    float(h.get("cost_held", 0) or 0)           # Official API total cost
+                    or float(h.get("equity_cost", 0) or 0)       # Fallback total cost
+                )
+
+                # ── Average cost per unit ────────────────────────────────────
+                # Check for a direct per-unit field first; derive from total if not present.
+                avg_cost_raw = (
+                    float(h.get("average_buy_price", 0) or 0)    # Per-unit field
+                    or float(h.get("avg_cost", 0) or 0)
+                )
+                if avg_cost_raw:
+                    avg_cost = avg_cost_raw
+                    # Back-fill cost_basis if we only have per-unit price
+                    if not cost_basis:
+                        cost_basis = avg_cost * qty
+                elif cost_basis and qty:
+                    avg_cost = cost_basis / qty
+                else:
+                    avg_cost = 0.0
+
+                # ── Live price ────────────────────────────────────────────────
+                pair          = f"{symbol}-USD"
                 current_price = self._get_best_price(pair)
-                market_value = qty * current_price
-                cost_basis = float(h.get("cost_held", 0) or 0)
-                unrealized_pnl = market_value - cost_basis
-                pnl_pct = (unrealized_pnl / cost_basis * 100) if cost_basis else 0
+                market_value  = qty * current_price
+
+                # ── P&L ───────────────────────────────────────────────────────
+                if cost_basis:
+                    unrealized_pnl = market_value - cost_basis
+                    pnl_pct        = unrealized_pnl / cost_basis * 100
+                elif avg_cost:
+                    unrealized_pnl = (current_price - avg_cost) * qty
+                    pnl_pct        = (current_price - avg_cost) / avg_cost * 100
+                else:
+                    unrealized_pnl = 0.0
+                    pnl_pct        = 0.0
+
                 enriched.append({
-                    "symbol": symbol,
-                    "pair": pair,
-                    "quantity": qty,
-                    "avg_cost": avg_price,
+                    "symbol":        symbol,
+                    "pair":          pair,
+                    "quantity":      qty,
+                    "avg_cost":      avg_cost,
                     "current_price": current_price,
-                    "market_value": market_value,
-                    "cost_basis": cost_basis,
-                    "unrealized_pnl": unrealized_pnl,
-                    "pnl_pct": pnl_pct,
+                    "market_value":  market_value,
+                    "cost_basis":    cost_basis,
+                    "unrealized_pnl":unrealized_pnl,
+                    "pnl_pct":       pnl_pct,
+                    "_raw":          h,   # Keep raw for debugging
                 })
+
             return enriched
         except Exception as e:
             print(f"Holdings error: {e}")
