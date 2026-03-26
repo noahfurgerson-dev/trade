@@ -292,6 +292,24 @@ class RobinhoodClient:
     def sell_limit(self, symbol: str, asset_quantity: float, limit_price: float) -> dict:
         return self.place_order(symbol, "sell", "limit", asset_quantity=asset_quantity, limit_price=limit_price)
 
+    def get_order(self, order_id: str) -> dict:
+        """Fetch a single order by ID to check its current status."""
+        try:
+            data = self._get(f"/api/v1/crypto/trading/orders/{order_id}/")
+            return {
+                "id":         data.get("id"),
+                "symbol":     data.get("symbol"),
+                "side":       data.get("side"),
+                "state":      data.get("state"),         # pending, filled, canceled, rejected
+                "filled_qty": float(data.get("filled_asset_quantity") or 0),
+                "avg_price":  float(data.get("average_price") or 0),
+                "quantity":   float(data.get("quantity") or 0),
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at"),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
     def cancel_order(self, order_id: str) -> dict:
         try:
             # Cancel is a POST per Robinhood API spec, not DELETE

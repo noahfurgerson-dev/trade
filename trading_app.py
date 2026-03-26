@@ -833,6 +833,37 @@ if clear_log:
     st.rerun()
 
 # ── Execute orchestrator ────────────────────────────────────────────────────────
+def _poll_order_status(rh_client, order_id: str, status_widget, max_polls: int = 6):
+    """Poll a Robinhood order until filled/rejected or max_polls reached."""
+    TERMINAL = {"filled", "canceled", "rejected", "failed"}
+    for i in range(max_polls):
+        time.sleep(2)
+        o = rh_client.get_order(order_id)
+        state = o.get("state", "unknown")
+        filled = o.get("filled_qty", 0)
+        price  = o.get("avg_price", 0)
+        if state in TERMINAL:
+            if state == "filled":
+                status_widget.write(
+                    f"    ✅ **FILLED** {filled:.6f} @ ${price:,.4f} "
+                    f"= **${filled * price:,.2f}**"
+                )
+            else:
+                status_widget.write(f"    ❌ Order {state.upper()}")
+            return state
+        status_widget.write(f"    ⏳ [{i+1}/{max_polls}] Status: `{state}` — waiting...")
+    status_widget.write("    ⏱ Timed out polling — check Recent Orders for final status")
+    return "unknown"
+
+
+def _push_log(msg: str, level: str = "INFO"):
+    st.session_state.strategy_log.insert(0, {
+        "time":  datetime.now().strftime("%H:%M:%S"),
+        "msg":   msg,
+        "level": level,
+    })
+
+
 def _run_orchestrator(dry_run: bool = False):
     from core.strategy_orchestrator import StrategyOrchestrator
     rh     = st.session_state.client if st.session_state.logged_in else None
@@ -842,105 +873,208 @@ def _run_orchestrator(dry_run: bool = False):
         st.warning("Connect to Robinhood or Alpaca first.")
         return
 
-    orch   = StrategyOrchestrator(rh_client=rh, alpaca_client=alpaca)
-    result = orch.run(dry_run=dry_run)
+    label = "Evaluating strategies..." if dry_run else "Running orchestrator..."
+    with st.status(label, expanded=True) as status:
 
-    # Push log entries into session
-    for entry in result["decision_log"]:
-        st.session_state.strategy_log.insert(0, {
-            "time":  entry["time"],
-            "msg":   entry["msg"],
-            "level": entry["level"],
-        })
+        st.write("**Step 1 — Reading market conditions**")
+        try:
+            import requests as _req
+            fg_raw = _req.get("https://api.alternative.me/fng/?limit=1", timeout=4).json()
+            fg_val = int(fg_raw["data"][0]["value"])
+            fg_lbl = fg_raw["data"][0]["value_classification"]
+        except Exception:
+            fg_val, fg_lbl = 50, "Neutral"
+
+        cash    = rh.get_cash() if rh else 0
+        equity  = rh.get_total_equity() if rh else 0
+        st.write(
+            f"  📊 Fear & Greed: **{fg_val}** ({fg_lbl})  |  "
+            f"RH Cash: **${cash:,.2f}**  |  Portfolio: **${equity:,.2f}**"
+        )
+
+        if cash < 10 and rh and not dry_run:
+            st.warning(
+                "⚠️ **Buying power is very low ($" + f"{cash:.2f}).** "
+                "Strategies will HOLD — add funds to your Robinhood account to enable trades."
+            )
+
+        st.write("**Step 2 — Scoring all strategies**")
+        orch   = StrategyOrchestrator(rh_client=rh, alpaca_client=alpaca)
+        result = orch.run(dry_run=dry_run)
+
+        selected = result["selected"]
+        st.write(f"  🏆 Selected **{len(selected)}** strategy/strategies: "
+                 f"{', '.join(r['name'] for r in selected) or 'none (scores too low)'}")
+
+        for r in result["evaluation"]:
+            icon = "✅" if r["selected"] else ("⏸" if r["on_cooldown"] else "⬜")
+            st.write(f"  {icon} `{r['name']:20}` score={r['score']:3d} — {r['reason'][:70]}")
+
+        if dry_run:
+            status.update(label="Evaluation complete ✓", state="complete")
+        else:
+            st.write("**Step 3 — Executing strategies**")
+            actions = result.get("actions", [])
+            trades  = [a for a in actions if a.get("action") in ("BUY","SELL")]
+
+            if not trades:
+                reasons = []
+                if cash < 10:
+                    reasons.append(f"insufficient cash (${cash:.2f})")
+                if not selected:
+                    reasons.append("no strategy scored above threshold")
+                for r in selected:
+                    reasons.append(f"{r['name']} found no entry signal")
+                st.write(
+                    "  ℹ️ No orders placed — "
+                    + ("; ".join(reasons) if reasons else "all strategies returned HOLD")
+                )
+            else:
+                st.write(f"  📋 **{len(trades)} order(s) placed:**")
+
+            # Show each trade with live polling
+            for a in trades:
+                sym   = a.get("pair") or a.get("symbol", "?")
+                side  = a.get("action", "?")
+                qty   = a.get("quantity", 0)
+                price = a.get("price", 0)
+                oid   = a.get("order_id")
+                strat = a.get("strategy", "")
+                color = "🟢" if side == "BUY" else "🔴"
+                st.write(
+                    f"  {color} **{side} {qty:.6f} {sym}** @ ${price:,.4f} "
+                    f"≈ ${qty * price:,.2f}  _(via {strat})_"
+                )
+                if oid and rh:
+                    _poll_order_status(rh, oid, st, max_polls=5)
+
+            # Save to session state
+            if "trade_executions" not in st.session_state:
+                st.session_state.trade_executions = []
+            st.session_state.trade_executions.insert(0, {
+                "time":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "run_type": "auto" if not dry_run else "eval",
+                "selected": [r["name"] for r in selected],
+                "trades":   len(trades),
+                "actions":  trades,
+                "fg_val":   fg_val,
+                "fg_lbl":   fg_lbl,
+                "cash":     cash,
+            })
+            st.session_state.trade_executions = st.session_state.trade_executions[:50]
+
+            summary = (
+                f"✅ Cycle complete — {len(selected)} strategies ran, "
+                f"{len(trades)} order(s) placed"
+            )
+            status.update(label=summary, state="complete")
+
+        # Push to activity log
+        for entry in result["decision_log"]:
+            _push_log(entry["msg"], entry["level"])
 
     st.session_state.orch_result     = result
     st.session_state.orch_evaluation = result["evaluation"]
     return result
 
+
 def _run_manual_strategies():
-    """Run only the manually toggled strategies."""
+    """Run only the manually toggled strategies with live status display."""
     active_strats = st.session_state.active_strategies
     if not active_strats:
         st.warning("Toggle at least one strategy ON in the sidebar.")
         return
 
-    from strategies.momentum          import MomentumStrategy
-    from strategies.mean_reversion    import MeanReversionStrategy
-    from strategies.dca               import DCAStrategy
-    from strategies.fear_greed        import FearGreedStrategy
-    from strategies.ai_signals        import AISignalStrategy
-    from strategies.rebalancer        import RebalancerStrategy
-    from strategies.trending_scanner  import TrendingScannerStrategy
-    from strategies.stock_momentum    import StockMomentumStrategy
+    from strategies.momentum           import MomentumStrategy
+    from strategies.mean_reversion     import MeanReversionStrategy
+    from strategies.dca                import DCAStrategy
+    from strategies.fear_greed         import FearGreedStrategy
+    from strategies.ai_signals         import AISignalStrategy
+    from strategies.rebalancer         import RebalancerStrategy
+    from strategies.trending_scanner   import TrendingScannerStrategy
+    from strategies.stock_momentum     import StockMomentumStrategy
     from strategies.dividend_collector import DividendCollectorStrategy
-    from strategies.options_income    import OptionsIncomeStrategy
-    from strategies.treasury_income   import TreasuryIncomeStrategy
+    from strategies.options_income     import OptionsIncomeStrategy
+    from strategies.treasury_income    import TreasuryIncomeStrategy
 
     rh     = st.session_state.client if st.session_state.logged_in else None
     alpaca = st.session_state.alpaca_client
 
     strat_map = {
-        "Momentum":       (MomentumStrategy,       rh),
-        "Mean Reversion": (MeanReversionStrategy,  rh),
-        "DCA":            (DCAStrategy,             rh),
-        "Fear & Greed":   (FearGreedStrategy,       rh),
-        "AI Signals":     (AISignalStrategy,        rh),
-        "Rebalancer":     (RebalancerStrategy,      rh),
-        "Trending":       (TrendingScannerStrategy, rh),
-        "Stock Momentum": (StockMomentumStrategy,   alpaca),
+        "Momentum":       (MomentumStrategy,         rh),
+        "Mean Reversion": (MeanReversionStrategy,    rh),
+        "DCA":            (DCAStrategy,               rh),
+        "Fear & Greed":   (FearGreedStrategy,         rh),
+        "AI Signals":     (AISignalStrategy,          rh),
+        "Rebalancer":     (RebalancerStrategy,        rh),
+        "Trending":       (TrendingScannerStrategy,   rh),
+        "Stock Momentum": (StockMomentumStrategy,     alpaca),
         "Dividend":       (DividendCollectorStrategy, alpaca),
-        "Options Income": (OptionsIncomeStrategy,   alpaca),
-        "Treasury":       (TreasuryIncomeStrategy,  alpaca),
+        "Options Income": (OptionsIncomeStrategy,     alpaca),
+        "Treasury":       (TreasuryIncomeStrategy,    alpaca),
     }
 
-    for strat_name in active_strats:
-        if strat_name not in strat_map:
-            continue
-        cls, client_inst = strat_map[strat_name]
-        if not client_inst:
-            st.session_state.strategy_log.insert(0, {
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "msg": f"[{strat_name}] No client — connect Robinhood or Alpaca first",
-                "level": "WARN",
-            })
-            continue
-        try:
-            strat = cls(client_inst)
-            strat.run()
-            for entry in strat.log:
-                st.session_state.strategy_log.insert(0, {
-                    "time":  entry["time"],
-                    "msg":   f"[{entry['strategy']}] {entry['message']}",
-                    "level": entry["level"],
-                })
-        except Exception as e:
-            st.session_state.strategy_log.insert(0, {
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "msg": f"[{strat_name}] ERROR: {e}",
-                "level": "WARN",
-            })
+    total_trades = 0
+    with st.status(f"Running {len(active_strats)} selected strategy/strategies...",
+                   expanded=True) as status:
+        for strat_name in active_strats:
+            if strat_name not in strat_map:
+                continue
+            cls, client_inst = strat_map[strat_name]
+            if not client_inst:
+                st.write(f"  ⚠️ **{strat_name}** — no client connected, skipping")
+                continue
+            st.write(f"**Running: {strat_name}**")
+            try:
+                strat   = cls(client_inst)
+                actions = strat.run()
+                trades  = [a for a in actions if a.get("action") in ("BUY","SELL")]
+                total_trades += len(trades)
+
+                for entry in strat.log:
+                    lvl_icon = {"TRADE": "💱", "WARN": "⚠️", "INFO": "ℹ️"}.get(entry["level"], "·")
+                    st.write(f"  {lvl_icon} {entry['message'][:100]}")
+                    _push_log(f"[{entry['strategy']}] {entry['message']}", entry["level"])
+
+                # Poll order status for any live orders
+                for a in trades:
+                    oid = a.get("order_id")
+                    if oid and rh:
+                        _poll_order_status(rh, oid, st, max_polls=4)
+
+                if not trades:
+                    st.write(f"  ✓ {strat_name} — HOLD (no signal or insufficient cash)")
+                else:
+                    st.write(f"  ✓ {strat_name} — **{len(trades)} order(s) placed**")
+
+            except Exception as e:
+                st.write(f"  ❌ {strat_name} error: {e}")
+                _push_log(f"[{strat_name}] ERROR: {e}", "WARN")
+
+        status.update(
+            label=f"Done — {total_trades} order(s) placed across {len(active_strats)} strategy/strategies",
+            state="complete" if total_trades > 0 else "complete"
+        )
+
 
 if run_auto:
     if st.session_state.demo_mode:
-        st.session_state.strategy_log.insert(0, {"time": datetime.now().strftime("%H:%M:%S"),
-            "msg": "[DEMO] Auto-orchestrator simulated — no real trades", "level": "INFO"})
+        _push_log("[DEMO] Auto-orchestrator simulated — no real trades", "INFO")
+        st.info("Demo mode — enable Live mode and connect Robinhood to place real trades.")
     else:
-        with st.spinner("Orchestrator running..."):
-            _run_orchestrator(dry_run=False)
+        _run_orchestrator(dry_run=False)
     st.rerun()
 
 if run_eval:
-    with st.spinner("Evaluating strategies..."):
-        _run_orchestrator(dry_run=True)
+    _run_orchestrator(dry_run=True)
     st.rerun()
 
 if run_manual:
     if st.session_state.demo_mode:
-        st.session_state.strategy_log.insert(0, {"time": datetime.now().strftime("%H:%M:%S"),
-            "msg": "[DEMO] Manual strategy cycle simulated", "level": "INFO"})
+        _push_log("[DEMO] Manual strategy cycle simulated", "INFO")
+        st.info("Demo mode — enable Live mode and connect Robinhood to place real trades.")
     else:
-        with st.spinner("Running selected strategies..."):
-            _run_manual_strategies()
+        _run_manual_strategies()
     st.rerun()
 
 # ── Strategy Scorecard ─────────────────────────────────────────────────────────
@@ -990,6 +1124,138 @@ else:
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+# ── System Diagnostics ────────────────────────────────────────────────────────
+
+st.markdown('<div class="section-title">System Diagnostics — Why Are / Aren\'t Trades Happening?</div>',
+            unsafe_allow_html=True)
+
+diag_cols = st.columns(5)
+
+# 1. Robinhood connection
+rh_ok    = is_live and st.session_state.client is not None
+diag_cols[0].markdown(f"""
+<div style="background:#161b27;border:1px solid {'#3fb950' if rh_ok else '#f85149'};
+            border-radius:10px;padding:12px;text-align:center">
+  <div style="font-size:1.4rem">{'✅' if rh_ok else '❌'}</div>
+  <div style="color:#8b949e;font-size:0.7rem;margin-top:4px">Robinhood</div>
+  <div style="color:{'#3fb950' if rh_ok else '#f85149'};font-size:0.75rem;font-weight:700">
+    {'Connected' if rh_ok else 'Not Connected'}
+  </div>
+</div>""", unsafe_allow_html=True)
+
+# 2. Alpaca connection
+alp_ok   = st.session_state.alpaca_client is not None
+diag_cols[1].markdown(f"""
+<div style="background:#161b27;border:1px solid {'#3fb950' if alp_ok else '#4d5566'};
+            border-radius:10px;padding:12px;text-align:center">
+  <div style="font-size:1.4rem">{'✅' if alp_ok else '⚫'}</div>
+  <div style="color:#8b949e;font-size:0.7rem;margin-top:4px">Alpaca</div>
+  <div style="color:{'#3fb950' if alp_ok else '#4d5566'};font-size:0.75rem;font-weight:700">
+    {'Connected' if alp_ok else 'Optional'}
+  </div>
+</div>""", unsafe_allow_html=True)
+
+# 3. Buying power
+rh_cash  = cash if is_live else 0
+cash_ok  = rh_cash >= 10
+diag_cols[2].markdown(f"""
+<div style="background:#161b27;border:1px solid {'#3fb950' if cash_ok else '#f85149'};
+            border-radius:10px;padding:12px;text-align:center">
+  <div style="font-size:1.4rem">{'✅' if cash_ok else '⚠️'}</div>
+  <div style="color:#8b949e;font-size:0.7rem;margin-top:4px">RH Cash</div>
+  <div style="color:{'#3fb950' if cash_ok else '#f85149'};font-size:0.75rem;font-weight:700">
+    ${rh_cash:,.2f}
+  </div>
+  {'<div style="color:#f85149;font-size:0.65rem">Fund account to trade</div>' if not cash_ok else ''}
+</div>""", unsafe_allow_html=True)
+
+# 4. Scheduler
+sched_ok = st.session_state.auto_orchestrate
+diag_cols[3].markdown(f"""
+<div style="background:#161b27;border:1px solid {'#3fb950' if sched_ok else '#4d5566'};
+            border-radius:10px;padding:12px;text-align:center">
+  <div style="font-size:1.4rem">{'✅' if sched_ok else '⏸️'}</div>
+  <div style="color:#8b949e;font-size:0.7rem;margin-top:4px">Auto-Scheduler</div>
+  <div style="color:{'#3fb950' if sched_ok else '#8b949e'};font-size:0.75rem;font-weight:700">
+    {'ON — every ' + str(st.session_state.orch_cadence_minutes) + 'min' if sched_ok else 'OFF'}
+  </div>
+</div>""", unsafe_allow_html=True)
+
+# 5. Last orchestrator run
+last_run = st.session_state.get("last_orch_run")
+run_count = st.session_state.get("orch_run_count", 0)
+diag_cols[4].markdown(f"""
+<div style="background:#161b27;border:1px solid {'#58a6ff' if last_run else '#4d5566'};
+            border-radius:10px;padding:12px;text-align:center">
+  <div style="font-size:1.4rem">{'🤖' if last_run else '💤'}</div>
+  <div style="color:#8b949e;font-size:0.7rem;margin-top:4px">Last Run</div>
+  <div style="color:{'#58a6ff' if last_run else '#4d5566'};font-size:0.75rem;font-weight:700">
+    {last_run.strftime('%H:%M:%S') if last_run else 'Never'}
+  </div>
+  <div style="color:#4d5566;font-size:0.65rem">{run_count} run(s) this session</div>
+</div>""", unsafe_allow_html=True)
+
+# Explain why no trades if relevant
+if rh_ok and not cash_ok:
+    st.error(
+        "🚫 **No trades are executing because your Robinhood buying power is $0.**  \n"
+        "To fix: open the Robinhood app → tap **Transfer** → deposit funds. "
+        "Even $50–100 is enough to start. Once funds settle (instantly for debit), trades will fire automatically."
+    )
+elif not rh_ok and not st.session_state.demo_mode:
+    st.warning("Connect your Robinhood account in the sidebar to enable live trading.")
+elif rh_ok and cash_ok and not sched_ok:
+    st.info("✅ Account funded and connected. Turn on **Auto-Orchestrator** in the sidebar to automate trades.")
+elif rh_ok and cash_ok and sched_ok:
+    st.success(
+        f"✅ **Everything is live.** Orchestrator runs every {st.session_state.orch_cadence_minutes} min. "
+        f"Runs so far this session: {run_count}."
+    )
+
+# ── Live Trade Execution Feed ──────────────────────────────────────────────────
+
+executions = st.session_state.get("trade_executions", [])
+if executions:
+    st.markdown('<div class="section-title">Live Trade Execution Feed</div>', unsafe_allow_html=True)
+    for ex in executions[:10]:
+        trade_count = ex.get("trades", 0)
+        border_c = "#3fb950" if trade_count > 0 else "#4d5566"
+        strategies_str = ", ".join(ex.get("selected", [])) or "none selected"
+        st.markdown(f"""
+        <div style="background:#161b27;border:1px solid {border_c};border-radius:10px;
+                    padding:14px 18px;margin:6px 0">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <span style="color:#8b949e;font-size:0.7rem">{ex['time']}</span>
+              <span style="color:#58a6ff;font-size:0.75rem;margin-left:10px;
+                           background:#1a2a3a;border-radius:4px;padding:2px 6px">
+                F&G {ex.get('fg_val','?')} · {ex.get('fg_lbl','?')}
+              </span>
+            </div>
+            <span style="color:{'#3fb950' if trade_count > 0 else '#8b949e'};
+                          font-weight:700;font-size:0.85rem">
+              {trade_count} order(s) placed
+            </span>
+          </div>
+          <div style="color:#e6edf3;font-size:0.8rem;margin-top:6px">
+            <b>Strategies:</b> {strategies_str}
+          </div>
+          <div style="color:#8b949e;font-size:0.75rem;margin-top:2px">
+            Cash at run time: ${ex.get('cash', 0):,.2f}
+          </div>
+          {''.join(
+            f"""<div style="color:{'#3fb950' if a['action']=='BUY' else '#f85149'};
+                            font-family:monospace;font-size:0.78rem;margin-top:4px">
+                  {"▲ BUY" if a["action"]=="BUY" else "▼ SELL"}
+                  {a.get("quantity",0):.6f} {a.get("pair") or a.get("symbol","?")}
+                  @ ${a.get("price",0):,.4f}
+                  ≈ ${a.get("quantity",0) * a.get("price",0):,.2f}
+                </div>"""
+            for a in ex.get("actions", [])
+          )}
+        </div>
+        """, unsafe_allow_html=True)
 
 # ── Activity Log + Orders ─────────────────────────────────────────────────────
 
