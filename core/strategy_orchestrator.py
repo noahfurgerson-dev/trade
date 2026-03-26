@@ -53,8 +53,9 @@ COOLDOWN_MINUTES = {
     "fear_greed":     240,    # 4 hours
     "trending":       120,    # 2 hours
     "ai_signals":     180,    # 3 hours — API cost conscious
-    "rebalancer":     360,    # 6 hours
-    "stock_momentum": 60,
+    "rebalancer":                360,    # 6 hours
+    "cross_platform_rebalancer": 240,    # 4 hours
+    "stock_momentum":             60,
     "dividend":       1440,   # 24 hours
     "options_income": 1440,
     "treasury":       1440,
@@ -400,6 +401,25 @@ class StrategyOrchestrator:
 
         return min(score, 100), "; ".join(reasons)
 
+    def _score_cross_platform_rebalancer(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["rh_configured"] and not ctx["alpaca_configured"]:
+            return 0, "Neither platform configured"
+        if not (ctx["rh_configured"] and ctx["alpaca_configured"]):
+            return 10, "Only one platform connected — cross-platform rebalance needs both"
+
+        score = 55
+        reasons = ["Both platforms connected — unified rebalance available"]
+
+        fg = ctx["fear_greed"]
+        if fg <= 25 or fg >= 80:
+            score += 25
+            reasons.append(f"Extreme market ({fg}) — portfolios likely drifted across platforms")
+        elif fg <= 40 or fg >= 65:
+            score += 10
+            reasons.append(f"Market at extremes ({fg}) — worth checking cross-platform drift")
+
+        return min(score, 100), "; ".join(reasons)
+
     # ── Main orchestration ─────────────────────────────────────────────────────
 
     def _is_on_cooldown(self, strategy_name: str) -> tuple[bool, str]:
@@ -431,17 +451,18 @@ class StrategyOrchestrator:
         )
 
         scorers = {
-            "momentum":       self._score_momentum,
-            "mean_reversion": self._score_mean_reversion,
-            "dca":            self._score_dca,
-            "fear_greed":     self._score_fear_greed,
-            "trending":       self._score_trending,
-            "ai_signals":     self._score_ai_signals,
-            "rebalancer":     self._score_rebalancer,
-            "stock_momentum": self._score_stock_momentum,
-            "dividend":       self._score_dividend,
-            "options_income": self._score_options_income,
-            "treasury":       self._score_treasury,
+            "momentum":               self._score_momentum,
+            "mean_reversion":         self._score_mean_reversion,
+            "dca":                    self._score_dca,
+            "fear_greed":             self._score_fear_greed,
+            "trending":               self._score_trending,
+            "ai_signals":             self._score_ai_signals,
+            "rebalancer":             self._score_rebalancer,
+            "cross_platform_rebalancer": self._score_cross_platform_rebalancer,
+            "stock_momentum":         self._score_stock_momentum,
+            "dividend":               self._score_dividend,
+            "options_income":         self._score_options_income,
+            "treasury":               self._score_treasury,
         }
 
         results = []
@@ -528,12 +549,13 @@ class StrategyOrchestrator:
         from strategies.dca             import DCAStrategy
         from strategies.fear_greed      import FearGreedStrategy
         from strategies.trending_scanner import TrendingScannerStrategy
-        from strategies.ai_signals      import AISignalStrategy
-        from strategies.rebalancer      import RebalancerStrategy
-        from strategies.stock_momentum  import StockMomentumStrategy
-        from strategies.dividend_collector import DividendCollectorStrategy
-        from strategies.options_income  import OptionsIncomeStrategy
-        from strategies.treasury_income import TreasuryIncomeStrategy
+        from strategies.ai_signals              import AISignalStrategy
+        from strategies.rebalancer              import RebalancerStrategy
+        from strategies.stock_momentum          import StockMomentumStrategy
+        from strategies.dividend_collector      import DividendCollectorStrategy
+        from strategies.options_income          import OptionsIncomeStrategy
+        from strategies.treasury_income         import TreasuryIncomeStrategy
+        from strategies.cross_platform_rebalancer import CrossPlatformRebalancer
 
         # Build strategy instances (lazy — only for selected)
         def _build(name: str):
@@ -552,6 +574,8 @@ class StrategyOrchestrator:
                 return AISignalStrategy(self.rh)
             if name == "rebalancer"     and self.rh:
                 return RebalancerStrategy(self.rh)
+            if name == "cross_platform_rebalancer":
+                return CrossPlatformRebalancer(self.rh, self.alpaca)
             if name == "stock_momentum" and self.alpaca:
                 return StockMomentumStrategy(self.alpaca)
             if name == "dividend"       and self.alpaca:
@@ -563,7 +587,8 @@ class StrategyOrchestrator:
             return None
 
         # Execute: SELL strategies first, then BUY strategies
-        sell_priority = ["rebalancer", "mean_reversion", "fear_greed", "momentum"]
+        sell_priority = ["cross_platform_rebalancer", "rebalancer", "mean_reversion",
+                          "fear_greed", "momentum"]
         buy_priority  = ["dca", "trending", "ai_signals", "fear_greed",
                           "dividend", "treasury", "options_income", "stock_momentum"]
 

@@ -1532,6 +1532,265 @@ if active_streams:
     st.plotly_chart(fig_income)
 
 
+# ── Live Trade Monitor ────────────────────────────────────────────────────────
+
+st.markdown('<div class="section-title">Live Trade Monitor</div>', unsafe_allow_html=True)
+
+def _render_order_status(symbol, side, state, qty, price, ts, platform, order_id=""):
+    side_color  = "#3fb950" if side in ("buy","BUY")  else "#f85149"
+    state_color = {"filled": "#3fb950", "partially_filled": "#f0883e",
+                   "pending_new": "#58a6ff", "new": "#58a6ff",
+                   "accepted": "#58a6ff", "canceled": "#4d5566",
+                   "rejected": "#f85149"}.get(state, "#8b949e")
+    state_icon  = {"filled": "✅", "partially_filled": "⏳", "pending_new": "🔄",
+                   "new": "🔄", "accepted": "🔄", "canceled": "❌",
+                   "rejected": "❌"}.get(state, "⏳")
+    plat_color  = "#8566ff" if platform == "Robinhood" else "#f0883e"
+    st.markdown(f"""
+    <div style="background:#161b27;border:1px solid #21262d;border-radius:8px;
+                padding:12px 16px;margin:4px 0;
+                border-left:3px solid {side_color}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:1.1rem">{state_icon}</span>
+          <div>
+            <span style="color:{side_color};font-weight:700;font-size:0.8rem;
+                          text-transform:uppercase">{side}</span>
+            <span style="color:#e6edf3;font-weight:700;margin-left:8px;
+                          font-family:monospace">{symbol}</span>
+            <span style="color:{plat_color};font-size:0.65rem;margin-left:8px;
+                          background:#1a1f2e;border-radius:4px;padding:2px 6px">{platform}</span>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="color:{state_color};font-weight:700;font-size:0.85rem">{state.replace('_',' ').upper()}</div>
+          <div style="color:#8b949e;font-size:0.75rem">
+            {f'{qty:.6f}' if qty < 1 else f'{qty:,.4f}'} @ ${price:,.4f if price < 1 else ","}{price:.2f}
+          </div>
+          <div style="color:#4d5566;font-size:0.7rem">{str(ts)[:16].replace('T',' ')}</div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+lm_rh_col, lm_alp_col = st.columns(2)
+
+with lm_rh_col:
+    st.caption("**Robinhood — Crypto Orders**")
+    if is_live and st.session_state.client:
+        try:
+            rh_orders = st.session_state.client.get_orders(10)
+            if rh_orders:
+                for o in rh_orders[:6]:
+                    _render_order_status(
+                        symbol   = o.get("symbol",""),
+                        side     = o.get("side",""),
+                        state    = o.get("state",""),
+                        qty      = float(o.get("filled_qty") or 0),
+                        price    = float(o.get("avg_price") or 0),
+                        ts       = o.get("created_at",""),
+                        platform = "Robinhood",
+                        order_id = o.get("id",""),
+                    )
+            else:
+                st.caption("No recent orders.")
+        except Exception as e:
+            st.caption(f"Could not load orders: {e}")
+    else:
+        # Demo orders
+        demo_orders = [
+            ("BTC-USD","buy","filled",0.00119,84200,"2026-03-26T14:32:00Z"),
+            ("ETH-USD","buy","filled",0.05556,1800,"2026-03-26T13:15:00Z"),
+            ("SOL-USD","sell","filled",0.76923,130,"2026-03-26T11:44:00Z"),
+        ]
+        for sym,side,state,qty,price,ts in demo_orders:
+            _render_order_status(sym,side,state,qty,price,ts,"Robinhood")
+
+with lm_alp_col:
+    st.caption("**Alpaca — Stocks & ETFs Orders**")
+    if st.session_state.alpaca_client:
+        try:
+            alp_orders = st.session_state.alpaca_client.get_orders(10)
+            if alp_orders:
+                for o in alp_orders[:6]:
+                    _render_order_status(
+                        symbol   = o.get("symbol",""),
+                        side     = o.get("side",""),
+                        state    = o.get("status",""),
+                        qty      = float(o.get("filled_qty") or 0),
+                        price    = float(o.get("avg_price") or 0),
+                        ts       = o.get("created_at",""),
+                        platform = "Alpaca",
+                        order_id = o.get("id",""),
+                    )
+            else:
+                st.caption("No recent orders.")
+        except Exception as e:
+            st.caption(f"Could not load Alpaca orders: {e}")
+    else:
+        # Demo
+        demo_alp = [
+            ("JEPI","buy","filled",2.1,55.40,"2026-03-26T14:01:00Z"),
+            ("SGOV","buy","filled",10.0,100.12,"2026-03-26T09:32:00Z"),
+        ]
+        for sym,side,state,qty,price,ts in demo_alp:
+            _render_order_status(sym,side,state,qty,price,ts,"Alpaca")
+
+# Refresh button
+if st.button("🔄 Refresh Orders", key="refresh_orders"):
+    st.rerun()
+
+# ── Cross-Platform Rebalancer ─────────────────────────────────────────────────
+
+st.markdown('<div class="section-title">Cross-Platform Rebalancer — Robinhood + Alpaca</div>',
+            unsafe_allow_html=True)
+st.caption(
+    "Treats your Robinhood crypto and Alpaca stocks as **one unified portfolio**. "
+    "Set target allocations and let the rebalancer keep everything on track automatically."
+)
+
+from strategies.cross_platform_rebalancer import (
+    CrossPlatformRebalancer, load_targets, save_targets,
+    DEFAULT_TARGETS, CRYPTO_PAIRS, DRIFT_THRESHOLD
+)
+
+rh_client_xp    = st.session_state.client if st.session_state.logged_in else None
+alpaca_client_xp = st.session_state.alpaca_client
+
+xp_rebal = CrossPlatformRebalancer(rh_client_xp, alpaca_client_xp)
+current_targets = load_targets()
+
+# ── Unified snapshot ──────────────────────────────────────────────────────────
+xp_snap = None
+if rh_client_xp or alpaca_client_xp:
+    with st.spinner("Loading unified portfolio snapshot..."):
+        try:
+            xp_snap = xp_rebal.get_unified_snapshot()
+        except Exception as e:
+            st.warning(f"Snapshot error: {e}")
+
+if xp_snap:
+    total_combined = xp_snap["total_equity"]
+
+    # Summary KPIs
+    xp_c1, xp_c2, xp_c3, xp_c4 = st.columns(4)
+    xp_c1.metric("Total Combined", f"${total_combined:,.2f}")
+    xp_c2.metric("Robinhood",      f"${xp_snap['rh_equity']:,.2f}",
+                  f"{xp_snap['rh_equity']/total_combined*100:.1f}% of total" if total_combined else "")
+    xp_c3.metric("Alpaca",         f"${xp_snap['alpaca_equity']:,.2f}",
+                  f"{xp_snap['alpaca_equity']/total_combined*100:.1f}% of total" if total_combined else "")
+    xp_c4.metric("Max Drift",
+                  f"{xp_snap['max_drift']:.1f}%",
+                  "⚠️ Rebalance needed" if xp_snap["needs_rebalance"] else "✅ Balanced",
+                  delta_color="inverse")
+
+    # ── Drift table ───────────────────────────────────────────────────────────
+    if xp_snap["drift"]:
+        st.markdown("**Allocation Drift**")
+        drift_cols = st.columns([1.2, 1, 1, 1, 1, 1.2, 1])
+        for lbl in ["Asset","Platform","Target %","Current %","Drift","Gap ($)","Action"]:
+            drift_cols[["Asset","Platform","Target %","Current %","Drift","Gap ($)","Action"].index(lbl)].markdown(
+                f"<span style='color:#8b949e;font-size:0.7rem;text-transform:uppercase'>{lbl}</span>",
+                unsafe_allow_html=True)
+        st.markdown("<hr style='border-color:#21262d;margin:4px 0 8px 0'>", unsafe_allow_html=True)
+
+        for d in xp_snap["drift"]:
+            drift_cols = st.columns([1.2, 1, 1, 1, 1, 1.2, 1])
+            drift_c = "#f85149" if d["drift_pct"] > DRIFT_THRESHOLD else (
+                      "#3fb950" if d["drift_pct"] < -DRIFT_THRESHOLD else "#8b949e")
+            act_c   = "#f85149" if d["action"]=="SELL" else "#3fb950"
+            plat_c  = "#8566ff" if d["platform"]=="Robinhood" else "#f0883e"
+            flag    = " ⚠️" if d["needs_action"] else ""
+
+            drift_cols[0].markdown(f"<span style='color:#e6edf3;font-weight:600;font-family:monospace'>{d['symbol']}</span>", unsafe_allow_html=True)
+            drift_cols[1].markdown(f"<span style='color:{plat_c};font-size:0.75rem'>{d['platform']}</span>", unsafe_allow_html=True)
+            drift_cols[2].markdown(f"<span style='color:#8b949e'>{d['target_pct']:.1f}%</span>", unsafe_allow_html=True)
+            drift_cols[3].markdown(f"<span style='color:#e6edf3'>{d['current_pct']:.1f}%</span>", unsafe_allow_html=True)
+            drift_cols[4].markdown(f"<span style='color:{drift_c};font-weight:700'>{d['drift_pct']:+.1f}%{flag}</span>", unsafe_allow_html=True)
+            drift_cols[5].markdown(f"<span style='color:#e6edf3'>${abs(d['gap_usd']):,.0f}</span>", unsafe_allow_html=True)
+            drift_cols[6].markdown(f"<span style='color:{act_c};font-weight:700'>{d['action'] if d['needs_action'] else '—'}</span>", unsafe_allow_html=True)
+
+    # ── Rebalance controls ────────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    xp_btn1, xp_btn2 = st.columns(2)
+
+    if xp_snap["needs_rebalance"]:
+        if xp_btn1.button("⚖️ Execute Rebalance Now", type="primary", key="xp_rebal_run"):
+            if st.session_state.demo_mode:
+                st.success("[DEMO] Cross-platform rebalance simulated.")
+            else:
+                with st.spinner("Rebalancing across Robinhood + Alpaca..."):
+                    try:
+                        rebal_actions = xp_rebal.run()
+                        for entry in xp_rebal.log:
+                            st.session_state.strategy_log.insert(0, {
+                                "time":  entry["time"],
+                                "msg":   f"[XP-REBAL] {entry['message']}",
+                                "level": entry["level"],
+                            })
+                        buys  = [a for a in rebal_actions if a.get("action")=="BUY"]
+                        sells = [a for a in rebal_actions if a.get("action")=="SELL"]
+                        needs = [a for a in rebal_actions if a.get("action")=="NEEDS_CASH"]
+                        st.success(f"Rebalance complete — {len(sells)} sell(s), {len(buys)} buy(s)")
+                        if needs:
+                            for n in needs:
+                                st.warning(f"⚠️ {n['symbol']} ({n['platform']}): {n['reason']}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Rebalance error: {e}")
+    else:
+        xp_btn1.success("✅ Portfolio is balanced — no action needed")
+
+    if xp_btn2.button("🔄 Refresh Snapshot", key="xp_refresh"):
+        st.rerun()
+
+    # ── Transfer guidance ─────────────────────────────────────────────────────
+    needs_cash = [d for d in xp_snap["drift"]
+                  if d["action"]=="BUY" and d["needs_action"]
+                  and d["current_val"]==0 and d["gap_usd"] > 50]
+    if needs_cash:
+        with st.expander("💱 Cash Transfer Guidance", expanded=True):
+            st.markdown(
+                "Since Robinhood and Alpaca are separate platforms, cash cannot move automatically. "
+                "Here's what to do:"
+            )
+            for item in needs_cash:
+                plat = item["platform"]
+                st.markdown(
+                    f"- **{item['symbol']}** needs **${item['gap_usd']:,.0f}** on **{plat}** — "
+                    f"{'deposit via Robinhood → Transfers' if plat=='Robinhood' else 'deposit via Alpaca → Banking'}"
+                )
+
+else:
+    st.info("Connect Robinhood and/or Alpaca to see your unified portfolio.")
+
+# ── Target Allocation Editor ──────────────────────────────────────────────────
+with st.expander("⚙️ Edit Target Allocations", expanded=False):
+    st.caption(
+        f"Set target % for each asset. Total should sum to ~85% (remaining ~15% stays as cash buffer). "
+        f"Drift threshold: **{DRIFT_THRESHOLD:.0f}%** — rebalance fires when any asset drifts beyond this."
+    )
+    edited_targets = {}
+    t_cols = st.columns(3)
+    for i, (sym, pct) in enumerate(current_targets.items()):
+        col = t_cols[i % 3]
+        plat = "🟣 RH" if sym in CRYPTO_PAIRS else "🟠 ALP"
+        edited_targets[sym] = col.number_input(
+            f"{plat} {sym}", min_value=0.0, max_value=50.0,
+            value=float(pct), step=0.5, key=f"target_{sym}"
+        )
+    total_targeted = sum(edited_targets.values())
+    color = "#3fb950" if total_targeted <= 90 else "#f0883e"
+    st.markdown(
+        f"<span style='color:{color}'>Total allocated: **{total_targeted:.1f}%** "
+        f"(cash buffer: ~{100-total_targeted:.1f}%)</span>",
+        unsafe_allow_html=True
+    )
+    if st.button("💾 Save Targets", type="primary", key="save_xp_targets"):
+        save_targets(edited_targets)
+        st.success("Targets saved! Next rebalance cycle will use these.")
+        st.rerun()
+
 # ── Alpaca Portfolio Summary ──────────────────────────────────────────────────
 
 if st.session_state.alpaca_client:
