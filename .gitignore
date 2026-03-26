@@ -1,0 +1,33 @@
+# ── Secrets — NEVER commit these ─────────────────────────────────────
+.env
+*.pem
+*.key
+
+# ── Runtime data (local only) ─────────────────────────────────────────
+data/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── Python environments ───────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+*.egg-info/
+dist/
+build/
+
+# ── Streamlit cache ───────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── OS junk ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor ────────────────────────────────────────────────────────────
+.vscode/settings.json
+*.swp
