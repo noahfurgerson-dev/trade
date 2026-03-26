@@ -142,7 +142,34 @@ def init_state():
 
 init_state()
 
-# ── Robinhood client ───────────────────────────────────────────────────────────
+# ── Auto-reconnect on every page load ─────────────────────────────────────────
+# If keys are already saved in .env (from a previous "Connect" click),
+# rebuild the clients silently so the user never has to re-enter credentials.
+
+if not st.session_state.client and not st.session_state.demo_mode:
+    _rh_key  = os.getenv("RH_API_KEY", "").strip()
+    _rh_priv = os.getenv("RH_PRIVATE_KEY", "").strip()
+    if _rh_key and _rh_priv:
+        try:
+            from core.robinhood import RobinhoodClient as _RHC
+            _c = _RHC()
+            if _c.is_configured():
+                st.session_state.client    = _c
+                st.session_state.logged_in = True
+        except Exception:
+            pass
+
+if not st.session_state.alpaca_client:
+    _alp_key    = os.getenv("ALPACA_API_KEY", "").strip()
+    _alp_secret = os.getenv("ALPACA_API_SECRET", "").strip()
+    if _alp_key and _alp_secret:
+        try:
+            from core.alpaca_client import AlpacaClient as _ALC
+            _ac = _ALC()
+            if _ac.is_configured():
+                st.session_state.alpaca_client = _ac
+        except Exception:
+            pass
 
 def get_client():
     from core.robinhood import RobinhoodClient
@@ -341,12 +368,6 @@ with st.sidebar:
     # Show status
     if st.session_state.alpaca_client:
         st.success("✅ Alpaca connected")
-    elif os.getenv("ALPACA_API_KEY"):
-        from core.alpaca_client import AlpacaClient
-        _ac = AlpacaClient()
-        if _ac.is_configured():
-            st.session_state.alpaca_client = _ac
-            st.caption("✅ Alpaca loaded from .env")
 
     st.markdown("---")
     st.markdown("### Strategy Control")
