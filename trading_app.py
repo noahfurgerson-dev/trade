@@ -1565,7 +1565,7 @@ def _render_order_status(symbol, side, state, qty, price, ts, platform, order_id
         <div style="text-align:right">
           <div style="color:{state_color};font-weight:700;font-size:0.85rem">{state.replace('_',' ').upper()}</div>
           <div style="color:#8b949e;font-size:0.75rem">
-            {f'{qty:.6f}' if qty < 1 else f'{qty:,.4f}'} @ ${price:,.4f if price < 1 else ","}{price:.2f}
+            {f'{qty:.6f}' if qty < 1 else f'{qty:,.4f}'} @ ${f'{price:.6f}' if price < 1 else f'{price:,.2f}'}
           </div>
           <div style="color:#4d5566;font-size:0.7rem">{str(ts)[:16].replace('T',' ')}</div>
         </div>
