@@ -370,12 +370,28 @@ def ai_deep_analysis(articles: list[dict], portfolio_context: str = "") -> dict:
     Send top headlines to Claude for deep market analysis.
     Returns structured signals dict.
     """
-    # Re-load .env at call time — guarantees the key is present even if
-    # the module was imported before dotenv had a chance to run.
-    load_dotenv(dotenv_path=_ENV_PATH, override=True)
+    # Layer 1 — environment variable (set by trading_app.py's load_dotenv)
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+
+    # Layer 2 — explicit dotenv reload with anchored path
     if not api_key:
-        return {"error": "No Anthropic API key"}
+        load_dotenv(dotenv_path=_ENV_PATH, override=True)
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+
+    # Layer 3 — read .env file directly as ultimate fallback
+    if not api_key:
+        try:
+            with open(_ENV_PATH) as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line.startswith("ANTHROPIC_API_KEY="):
+                        api_key = _line.split("=", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+
+    if not api_key:
+        return {"error": "No Anthropic API key — add ANTHROPIC_API_KEY to your .env file"}
 
     try:
         import anthropic
