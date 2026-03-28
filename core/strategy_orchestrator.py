@@ -41,6 +41,9 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 
+from core.performance_tracker import log_cycle
+from core.adaptive_learner    import load_weights, run_learning_cycle, should_run_cycle
+
 # ── Score definitions ─────────────────────────────────────────────────────────
 
 # Minimum score for a strategy to be selected (0–100)
@@ -579,20 +582,31 @@ class StrategyOrchestrator:
             "news_sentiment":             self._score_news_sentiment,
         }
 
+        # Load adaptive weights (1.0 = neutral, >1 = boosted, <1 = penalised)
+        weights = load_weights()
+
         results = []
         for name, scorer in scorers.items():
             raw_score, reason = scorer(ctx)
             on_cooldown, cooldown_reason = self._is_on_cooldown(name)
 
-            final_score = raw_score
+            # Apply learned weight to base score
+            weight      = weights.get(name, 1.0)
+            adj_score   = int(min(100, raw_score * weight))
+            weight_note = f" [w={weight:.2f}]" if abs(weight - 1.0) > 0.05 else ""
+
+            final_score = adj_score
             if on_cooldown:
                 final_score = 0
-                reason = f"[COOLDOWN] {cooldown_reason} | {reason}"
+                reason = f"[COOLDOWN] {cooldown_reason} | {reason}{weight_note}"
+            elif weight_note:
+                reason = reason + weight_note
 
             results.append({
                 "name":         name,
                 "score":        final_score,
                 "raw_score":    raw_score,
+                "weight":       weight,
                 "reason":       reason,
                 "on_cooldown":  on_cooldown,
                 "selected":     False,
@@ -654,6 +668,16 @@ class StrategyOrchestrator:
                 "decision_log":  self.decision_log,
                 "dry_run":       True,
             }
+
+        # ── Snapshot portfolio value BEFORE execution ──────────────────────
+        pv_before = 0.0
+        try:
+            if self.rh and self.rh.is_configured():
+                pv_before += self.rh.get_total_equity() or 0.0
+            if self.alpaca and self.alpaca.is_configured():
+                pv_before += self.alpaca.get_portfolio_value() or 0.0
+        except Exception:
+            pass
 
         all_actions = []
 
@@ -738,27 +762,73 @@ class StrategyOrchestrator:
                 self._log(f"  {name} FAILED: {e}", "WARN")
                 result["error"] = str(e)
 
+        # ── Snapshot portfolio value AFTER execution ───────────────────────
+        pv_after = 0.0
+        try:
+            if self.rh and self.rh.is_configured():
+                pv_after += self.rh.get_total_equity() or 0.0
+            if self.alpaca and self.alpaca.is_configured():
+                pv_after += self.alpaca.get_portfolio_value() or 0.0
+        except Exception:
+            pass
+
+        # ── Log cycle to performance tracker ───────────────────────────────
+        ran_strategies = [r["name"] for r in selected]
+        if ran_strategies:
+            try:
+                log_cycle(
+                    strategies=ran_strategies,
+                    pv_before=pv_before,
+                    pv_after=pv_after,
+                    actions=len(all_actions),
+                )
+            except Exception as _le:
+                self._log(f"  Perf log error: {_le}", "WARN")
+
+        # ── Trigger adaptive learning cycle if due ──────────────────────────
+        learning_result = None
+        try:
+            if should_run_cycle():
+                self._log("12-hour learning cycle triggered — updating strategy weights...", "INFO")
+                learning_result = run_learning_cycle()
+                if learning_result.get("ran"):
+                    self._log(
+                        f"  Weights updated (cycle #{learning_result.get('cycle', '?')}): "
+                        f"{len(learning_result.get('changes', {}))} strategies adjusted",
+                        "INFO",
+                    )
+        except Exception as _ae:
+            self._log(f"  Adaptive learner error: {_ae}", "WARN")
+
         # Record history
         self.state["history"].append({
             "timestamp": datetime.now().isoformat(),
             "selected":  [r["name"] for r in selected],
             "actions":   len(all_actions),
+            "pv_before": pv_before,
+            "pv_after":  pv_after,
         })
         # Keep last 200 history records
         self.state["history"] = self.state["history"][-200:]
         _save_state(self.state)
 
+        delta = pv_after - pv_before
         self._log(
             f"=== CYCLE COMPLETE: {len(selected)} strategies, "
-            f"{len(all_actions)} total action(s) ==="
+            f"{len(all_actions)} total action(s)"
+            + (f", P&L ${delta:+.2f}" if pv_before else "")
+            + " ==="
         )
 
         return {
-            "evaluation":   evaluation,
-            "selected":     selected,
-            "actions":      all_actions,
-            "decision_log": self.decision_log,
-            "dry_run":      False,
+            "evaluation":       evaluation,
+            "selected":         selected,
+            "actions":          all_actions,
+            "decision_log":     self.decision_log,
+            "dry_run":          False,
+            "pv_before":        pv_before,
+            "pv_after":         pv_after,
+            "learning_result":  learning_result,
         }
 
     def get_schedule_recommendation(self) -> dict:

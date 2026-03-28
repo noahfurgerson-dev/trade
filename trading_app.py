@@ -25,7 +25,31 @@ import os
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 
-load_dotenv(override=True)  # override=True picks up .env changes without restart
+# Load .env using an explicit absolute path anchored to this file,
+# so it works regardless of Streamlit's working directory.
+_APP_DIR  = os.path.dirname(os.path.abspath(__file__))
+_ENV_FILE = os.path.join(_APP_DIR, ".env")
+load_dotenv(dotenv_path=_ENV_FILE, override=True)
+
+# Explicitly push every key into os.environ so sub-modules that call
+# os.getenv() without their own load_dotenv always find the values.
+def _push_env_keys():
+    """Read .env directly and force every key into os.environ."""
+    try:
+        with open(_ENV_FILE) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _v = _line.split("=", 1)
+                _k = _k.strip()
+                _v = _v.strip()
+                if _k and _v:
+                    os.environ[_k] = _v   # always override — .env is the source of truth
+    except Exception:
+        pass
+
+_push_env_keys()
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -280,7 +304,7 @@ with st.sidebar:
                 with open(env_path, "w") as f:
                     f.writelines(lines)
                 # Reload env and create fresh client
-                load_dotenv(override=True)
+                load_dotenv(dotenv_path=_ENV_FILE, override=True)
                 os.environ["RH_API_KEY"] = api_key
                 os.environ["RH_PRIVATE_KEY"] = private_key
                 from core.robinhood import RobinhoodClient
@@ -346,7 +370,7 @@ with st.sidebar:
             ]
             with open(env_path, "w") as f:
                 f.writelines(lines)
-            load_dotenv(override=True)
+            load_dotenv(dotenv_path=_ENV_FILE, override=True)
             os.environ["ALPACA_API_KEY"]    = alpaca_key
             os.environ["ALPACA_API_SECRET"] = alpaca_secret
             os.environ["ALPACA_PAPER"]      = "false" if not alpaca_paper else "true"
@@ -2230,6 +2254,103 @@ with st.expander("📰 Live News Feed & Sentiment Signals", expanded=False):
                 )
         elif ai_result.get("error"):
             st.warning(f"AI: {ai_result['error']}")
+
+# ── Strategy Learning Centre ────────────────────────────────────────────────────
+
+st.markdown('<div class="section-title">Strategy Learning Centre</div>', unsafe_allow_html=True)
+st.caption("Every 12 hours the system reviews each strategy's attributed P&L and auto-adjusts its selection weight.")
+
+try:
+    from core.adaptive_learner    import get_weights_report, run_learning_cycle, should_run_cycle
+    from core.performance_tracker import get_strategy_performance, get_recent_cycles
+
+    _wr = get_weights_report()
+
+    _lc1, _lc2, _lc3, _lc4 = st.columns(4)
+    _lc1.metric("Last Learning Cycle", _wr["last_cycle"])
+    _lc2.metric("Next Cycle Due",      _wr["next_cycle"])
+    _lc3.metric("Cycles Completed",    _wr["cycle_count"])
+    _lc4.metric("Cycle Interval",      "12 hours")
+
+    if st.button("Run Learning Cycle Now", key="run_learn_now", type="primary"):
+        with st.spinner("Analysing 12-hour strategy performance and updating weights..."):
+            _res = run_learning_cycle(force=True)
+        if _res.get("ran"):
+            st.success(f"Weights updated — Cycle #{_res['cycle']} complete. {len(_res['changes'])} strategies adjusted.")
+            st.rerun()
+        else:
+            st.info(_res.get("reason", "Nothing to update."))
+
+    # Weights table
+    _perf_data = get_strategy_performance(hours=12)
+
+    with st.expander("Strategy Weights & 12-Hour Performance", expanded=True):
+        _w_rows = []
+        for _s, _w in _wr["weights"].items():
+            _p    = _perf_data.get(_s, {})
+            _runs = _p.get("cycles_run", 0)
+            _pnl  = _p.get("total_pnl", 0.0)
+            _wr2  = _p.get("win_rate", 0.0)
+            _tag  = (
+                "BOOSTED"  if _w > 1.10 else
+                "REDUCED"  if _w < 0.90 else
+                "NEUTRAL"
+            )
+            _color = (
+                "#3fb950" if _tag == "BOOSTED" else
+                "#f85149" if _tag == "REDUCED" else
+                "#8b949e"
+            )
+            _w_rows.append({
+                "Strategy":    _s,
+                "Weight":      f"{_w:.3f}x",
+                "Status":      _tag,
+                "Cycles (12h)": _runs,
+                "Attributed P&L": f"${_pnl:+.2f}" if _runs else "—",
+                "Win Rate": f"{_wr2:.0%}" if _runs else "—",
+            })
+
+        import pandas as _pd2
+        _wdf = _pd2.DataFrame(_w_rows)
+        st.dataframe(
+            _wdf,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Weight": st.column_config.TextColumn("Weight"),
+                "Status": st.column_config.TextColumn("Status"),
+            }
+        )
+
+    # Recent cycle history
+    _recent = get_recent_cycles(limit=15)
+    if _recent:
+        with st.expander("Recent Cycle History (last 15)", expanded=False):
+            _cycle_rows = []
+            for _c in _recent:
+                _delta = _c.get("delta_usd", 0)
+                _cycle_rows.append({
+                    "Time":       _c["ts"][:16].replace("T", " "),
+                    "Strategies": ", ".join(_c.get("strategies", [])),
+                    "Actions":    _c.get("actions", 0),
+                    "P&L":        f"${_delta:+.2f}",
+                    "Portfolio":  f"${_c.get('pv_after', 0):,.2f}",
+                })
+            import pandas as _pd3
+            st.dataframe(_pd3.DataFrame(_cycle_rows), use_container_width=True, hide_index=True)
+
+    # Learning log
+    if _wr.get("last_notes"):
+        with st.expander("Weight Adjustment Log", expanded=False):
+            for _n in reversed(_wr["last_notes"]):
+                color = "#3fb950" if "BOOST" in _n else "#f85149" if "REDUCE" in _n else "#8b949e"
+                st.markdown(
+                    f"<span style='font-family:monospace;font-size:0.78rem;color:{color}'>{_n}</span>",
+                    unsafe_allow_html=True
+                )
+
+except Exception as _le:
+    st.warning(f"Learning centre unavailable: {_le}")
 
 # ── Opportunity Map ────────────────────────────────────────────────────────────
 

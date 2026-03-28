@@ -38,9 +38,10 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from strategies.base import BaseStrategy
 
-# Load .env using an explicit path anchored to this file's location,
-# so it works regardless of the working directory Streamlit uses.
-_ENV_PATH = os.path.join(os.path.dirname(__file__), "..", ".env")
+# Resolve .env absolutely so it works regardless of CWD or __file__ being relative.
+_ENV_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+)
 load_dotenv(dotenv_path=_ENV_PATH, override=True)
 
 # ── Watched tickers ───────────────────────────────────────────────────────────
