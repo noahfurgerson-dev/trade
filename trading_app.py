@@ -2080,6 +2080,9 @@ with st.expander("🤖 Multi-AI Market Signals", expanded=False):
                 from core.multi_ai_signals import run_multi_ai_analysis
                 import json as _json
 
+                rh     = st.session_state.get("client")
+                alpaca = st.session_state.get("alpaca_client")
+
                 # Build context
                 ctx_parts = []
                 if rh and rh.is_configured():
