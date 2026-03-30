@@ -137,19 +137,21 @@ def _query_openai(prompt: str) -> Optional[dict]:
 
 
 def _query_gemini(prompt: str) -> Optional[dict]:
-    """Query Google Gemini 1.5 Flash."""
+    """Query Google Gemini 2.5 Flash (new google-genai SDK)."""
     api_key = os.getenv("GOOGLE_API_KEY", "").strip()
     if not api_key:
         return None
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp  = model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 max_output_tokens=1200,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         return _extract_json(resp.text)
