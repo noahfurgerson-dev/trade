@@ -51,6 +51,20 @@ def _push_env_keys():
 
 _push_env_keys()
 
+def _push_streamlit_secrets():
+    """
+    On Streamlit Cloud there is no .env file — secrets live in st.secrets.
+    Push every secret into os.environ so all submodules find them via os.getenv.
+    """
+    try:
+        for _k, _v in st.secrets.items():
+            if _k and isinstance(_v, str) and _v.strip():
+                os.environ[_k] = _v.strip()
+    except Exception:
+        pass
+
+_push_streamlit_secrets()
+
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
