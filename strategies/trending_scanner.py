@@ -19,24 +19,9 @@ from strategies.base import BaseStrategy
 COINGECKO_TRENDING_URL = "https://api.coingecko.com/api/v3/search/trending"
 COINGECKO_PRICE_URL    = "https://api.coingecko.com/api/v3/simple/price"
 
-# Robinhood tradeable symbols (symbol → Robinhood pair)
-RH_TRADEABLE = {
-    "btc":   "BTC-USD",
-    "eth":   "ETH-USD",
-    "sol":   "SOL-USD",
-    "doge":  "DOGE-USD",
-    "ada":   "ADA-USD",
-    "avax":  "AVAX-USD",
-    "link":  "LINK-USD",
-    "matic": "MATIC-USD",
-    "shib":  "SHIB-USD",
-    "ltc":   "LTC-USD",
-    "uni":   "UNI-USD",
-    "xlm":   "XLM-USD",
-    "xrp":   "XRP-USD",
-    "dot":   "DOT-USD",
-    "atom":  "ATOM-USD",
-}
+# Dynamically built from live Robinhood tradeable pairs
+from core.crypto_universe import get_all_pairs as _gap
+RH_TRADEABLE = {p.split("-")[0].lower(): p for p in _gap()}
 
 MAX_POSITION_PCT  = 0.05   # Max 5% per trending coin
 MIN_NOTIONAL      = 15.0   # Minimum $15 trade

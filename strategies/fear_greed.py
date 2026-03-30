@@ -24,8 +24,9 @@ FEAR_BUY          = 44    # Score ≤ 44 → moderate buy
 GREED_REDUCE      = 65    # Score ≥ 65 → start trimming
 EXTREME_GREED_SELL= 80    # Score ≥ 80 → take profits aggressively
 
-BUY_PAIRS   = ["BTC-USD", "ETH-USD", "SOL-USD"]
-SELL_PAIRS  = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "ADA-USD"]
+from core.crypto_universe import get_pairs_for as _gpf
+BUY_PAIRS   = _gpf("fear_greed")
+SELL_PAIRS  = _gpf("fear_greed")
 
 
 def fetch_fear_greed() -> dict:

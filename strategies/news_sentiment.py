@@ -46,11 +46,8 @@ load_dotenv(dotenv_path=_ENV_PATH, override=True)
 
 # ── Watched tickers ───────────────────────────────────────────────────────────
 
-CRYPTO_TICKERS = {
-    "BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD",
-    "DOGE": "DOGE-USD", "ADA": "ADA-USD", "AVAX": "AVAX-USD",
-    "LINK": "LINK-USD", "XRP": "XRP-USD", "MATIC": "MATIC-USD",
-}
+from core.crypto_universe import get_ticker_map as _get_ticker_map
+CRYPTO_TICKERS = _get_ticker_map()   # {'BTC': 'BTC-USD', ...} — all 65 live pairs
 
 STOCK_TICKERS = [
     "NVDA", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "TSLA",

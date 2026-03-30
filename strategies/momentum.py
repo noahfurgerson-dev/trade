@@ -9,11 +9,10 @@ Target coins: BTC, ETH, SOL, DOGE, ADA, AVAX, LINK, MATIC
 
 import statistics
 from strategies.base import BaseStrategy
+from core.crypto_universe import get_pairs_for
 
-WATCHLIST = [
-    "BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD",
-    "ADA-USD", "AVAX-USD", "LINK-USD", "MATIC-USD",
-]
+# Loaded dynamically — full Robinhood universe filtered for momentum
+WATCHLIST = get_pairs_for("momentum")
 
 # Entry: 3-day gain > 5%, RSI not overbought
 BUY_MOMENTUM_THRESHOLD = 0.05

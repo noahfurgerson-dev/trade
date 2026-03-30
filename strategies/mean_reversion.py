@@ -11,8 +11,9 @@ Logic:
 """
 
 from strategies.base import BaseStrategy
+from core.crypto_universe import get_pairs_for
 
-WATCHLIST = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD"]
+WATCHLIST = get_pairs_for("mean_reversion")
 TAKE_PROFIT_PCT = 0.05
 STOP_LOSS_PCT = 0.10
 

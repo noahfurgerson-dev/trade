@@ -74,8 +74,10 @@ REQUIRED JSON FORMAT:
   "top_risks": ["TSLA"]
 }}"""
 
-WATCHED_TICKERS = [
-    "BTC", "ETH", "SOL", "DOGE", "ADA",
+from core.crypto_universe import get_tickers_for as _gct
+_CRYPTO_TICKERS = _gct("ai_signals")   # Major + DeFi tickers from live RH universe
+
+WATCHED_TICKERS = _CRYPTO_TICKERS + [
     "NVDA", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "TSLA", "AMD",
     "SPY", "QQQ", "JEPI", "SCHD", "SGOV",
 ]

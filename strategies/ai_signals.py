@@ -20,8 +20,9 @@ from datetime import datetime
 from strategies.base import BaseStrategy
 from core.multi_ai_signals import run_multi_ai_analysis
 
-CRYPTO_UNIVERSE = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "ADA-USD", "AVAX-USD"]
-CRYPTO_TICKERS  = {p.split("-")[0]: p for p in CRYPTO_UNIVERSE}
+from core.crypto_universe import get_pairs_for as _gpf, get_ticker_map as _gtm
+CRYPTO_UNIVERSE = _gpf("ai_signals")   # Major + DeFi/L2 — full AI-relevant universe
+CRYPTO_TICKERS  = _gtm()               # Full map for sell-side lookup
 
 # Minimum agreement fraction to auto-execute (0.67 = 2/3 providers must agree)
 MIN_AGREEMENT_TO_EXECUTE = 0.50
