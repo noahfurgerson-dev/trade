@@ -11,6 +11,11 @@ PyNaCl>=1.5.0
 # Claude AI signals (Anthropic API)
 anthropic>=0.25.0
 
+# Multi-AI consensus engine (add API keys to .env to activate each)
+openai>=1.30.0            # GPT-4o-mini
+google-generativeai>=0.7.0  # Gemini 1.5 Flash
+groq>=0.9.0               # Llama 3.3 70B (free tier at console.groq.com)
+
 # Browser automation (for other tools)
 playwright
 

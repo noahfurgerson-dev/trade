@@ -2025,6 +2025,167 @@ if st.session_state.alpaca_client:
                       <span style="color:{act_color};font-size:0.78rem;font-weight:700">{p['action']}</span>
                     </div>""", unsafe_allow_html=True)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Multi-AI Consensus Panel ──────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">🤖 Multi-AI Consensus Intelligence</div>',
+            unsafe_allow_html=True)
+st.caption("Claude + GPT-4o + Gemini + Groq vote on the same market prompt. "
+           "High-agreement signals (2+ AIs agree) are highlighted and auto-executed.")
+
+from core.multi_ai_signals import get_provider_status
+
+# ── Provider status bar ────────────────────────────────────────────────────────
+provider_statuses = get_provider_status()
+pcols = st.columns(len(provider_statuses))
+for col, ps in zip(pcols, provider_statuses):
+    with col:
+        if ps["configured"]:
+            st.success(f"**{ps['provider'].split(' ')[0]}**\nConnected")
+        else:
+            st.warning(f"**{ps['provider'].split(' ')[0]}**\nNo key")
+
+with st.expander("🤖 Multi-AI Market Signals", expanded=False):
+    st.caption("Each AI model independently analyses your portfolio + live prices. "
+               "Signals where 2+ models agree are STRONG signals.")
+
+    # Key setup helper
+    missing = [p for p in provider_statuses if not p["configured"]]
+    if missing:
+        with st.container():
+            st.info(
+                f"**Add more AI providers for better consensus:**\n\n"
+                + "\n".join(
+                    f"- `{p['env_key']}` → {p['provider']}"
+                    for p in missing
+                )
+                + "\n\nPaste keys into your `.env` file. "
+                  "**Groq is free** at [console.groq.com](https://console.groq.com/keys)"
+            )
+
+    run_col, status_col = st.columns([1, 2])
+    with run_col:
+        run_multi_ai = st.button("Run Multi-AI Analysis", type="primary",
+                                  key="run_multi_ai_btn", use_container_width=True)
+        dry_multi = st.checkbox("Signals only (no trades)", value=True, key="multi_ai_dry")
+
+    with status_col:
+        n_configured = sum(1 for p in provider_statuses if p["configured"])
+        st.metric("AI Providers Active", n_configured, delta=f"of {len(provider_statuses)}")
+
+    if run_multi_ai:
+        with st.spinner(f"Querying {n_configured} AI model(s) in parallel..."):
+            try:
+                from core.multi_ai_signals import run_multi_ai_analysis
+                import json as _json
+
+                # Build context
+                ctx_parts = []
+                if rh and rh.is_configured():
+                    try:
+                        h   = rh.get_holdings()
+                        ctx_parts.append(_json.dumps({
+                            "rh_equity": rh.get_total_equity(),
+                            "rh_cash":   rh.get_cash(),
+                            "holdings":  [{"s": x["pair"], "v": x["market_value"]} for x in h],
+                        }))
+                    except Exception:
+                        pass
+
+                if st.session_state.alpaca_client:
+                    try:
+                        ac = st.session_state.alpaca_client
+                        ctx_parts.append(_json.dumps({
+                            "alpaca_equity": ac.get_portfolio_value(),
+                            "alpaca_cash":   ac.get_cash(),
+                        }))
+                    except Exception:
+                        pass
+
+                multi_result = run_multi_ai_analysis(
+                    market_context="\n".join(ctx_parts) or "No live data",
+                )
+                st.session_state["multi_ai_result"] = multi_result
+
+            except Exception as e:
+                st.error(f"Multi-AI error: {e}")
+
+    # Display results
+    if "multi_ai_result" in st.session_state:
+        res = st.session_state["multi_ai_result"]
+
+        if res.get("error") and not res.get("signals"):
+            st.error(res["error"])
+        else:
+            # ── Consensus signals table ────────────────────────────────
+            signals = res.get("signals", [])
+            if signals:
+                st.markdown("#### Consensus Signals")
+                sig_rows = []
+                for s in signals:
+                    action_icon = "🟢" if s["action"] == "BUY" else ("🔴" if s["action"] == "SELL" else "⚪")
+                    strength_color = "🔥" if s["strength"] == "STRONG" else "💡"
+                    sig_rows.append({
+                        "Ticker":      s["ticker"],
+                        "Action":      f"{action_icon} {s['action']}",
+                        "Strength":    f"{strength_color} {s['strength']}",
+                        "Confidence":  f"{s['confidence']:.0%}",
+                        "Agreement":   f"{s['agreement']:.0%} ({s['providers_agree']}/{s['providers_total']})",
+                        "Rationale":   s["rationale"][:80],
+                    })
+                st.dataframe(
+                    sig_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No consensus signals above threshold. All AIs agree to hold or are uncertain.")
+
+            # ── Per-provider summaries ─────────────────────────────────
+            summaries = res.get("market_summaries", {})
+            if summaries:
+                st.markdown("#### What Each AI Thinks")
+                for provider, summary in summaries.items():
+                    if summary:
+                        icon = {"Claude": "🟠", "GPT-4o": "🟢", "Gemini": "🔵", "Groq": "🟣"}.get(provider, "⚪")
+                        st.markdown(f"**{icon} {provider}:** {summary}")
+
+            # ── Agreement heatmap ──────────────────────────────────────
+            agreement_scores = res.get("agreement_scores", {})
+            if agreement_scores:
+                st.markdown("#### Provider Agreement by Ticker")
+                agr_cols = st.columns(min(len(agreement_scores), 6))
+                for col, (ticker, score) in zip(agr_cols, sorted(
+                    agreement_scores.items(), key=lambda x: x[1], reverse=True
+                )[:6]):
+                    with col:
+                        color = "🟢" if score >= 0.67 else ("🟡" if score >= 0.5 else "🔴")
+                        st.metric(ticker, f"{score:.0%}", delta=color)
+
+            # ── Risk + metadata ────────────────────────────────────────
+            risk = res.get("consensus_risk", "unknown")
+            used = res.get("providers_used", [])
+            failed = res.get("providers_failed", [])
+            risk_color = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(risk, "⚪")
+            st.caption(
+                f"{risk_color} **Consensus risk:** {risk.upper()}  |  "
+                f"**Providers used:** {', '.join(used)}  |  "
+                f"**Failed/unconfigured:** {', '.join(failed) or 'none'}  |  "
+                f"Updated: {res.get('timestamp','')[:16].replace('T',' ')}"
+            )
+
+            # ── Execute if not dry run ─────────────────────────────────
+            if not dry_multi and not run_multi_ai:
+                pass  # Only execute when button explicitly clicked
+            elif not dry_multi and run_multi_ai:
+                strong = [s for s in signals if s["strength"] == "STRONG" and s["action"] != "HOLD"]
+                if strong:
+                    st.success(f"Would auto-execute {len(strong)} STRONG signal(s). Uncheck 'Signals only' to enable live trading.")
+                else:
+                    st.info("No STRONG signals to execute.")
+
+
 # ── News Sentiment Feed ────────────────────────────────────────────────────────
 
 st.markdown('<div class="section-title">📰 News Sentiment Engine</div>', unsafe_allow_html=True)
