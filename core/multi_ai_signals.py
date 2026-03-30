@@ -319,6 +319,21 @@ def run_multi_ai_analysis(
 
     Returns: consensus dict (see _aggregate_consensus docstring)
     """
+    # Always re-read .env directly before checking keys — guarantees fresh
+    # values even if keys were added after the module was first imported.
+    try:
+        with open(_ENV_FILE) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _v = _line.split("=", 1)
+                _k, _v = _k.strip(), _v.strip()
+                if _k and _v:
+                    os.environ[_k] = _v
+    except Exception:
+        pass
+
     if tickers is None:
         tickers = WATCHED_TICKERS
 
@@ -375,6 +390,20 @@ def get_provider_status() -> list[dict]:
     Return which AI providers are configured (for dashboard display).
     Does NOT make any API calls.
     """
+    # Re-read .env so status reflects keys added since app started
+    try:
+        with open(_ENV_FILE) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _v = _line.split("=", 1)
+                _k, _v = _k.strip(), _v.strip()
+                if _k and _v:
+                    os.environ[_k] = _v
+    except Exception:
+        pass
+
     key_map = {
         "Claude (Anthropic)":  "ANTHROPIC_API_KEY",
         "GPT-4o (OpenAI)":    "OPENAI_API_KEY",
