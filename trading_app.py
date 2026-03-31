@@ -22,6 +22,7 @@ import plotly.express as px
 import pandas as pd
 import time
 import os
+import json
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 
@@ -148,9 +149,33 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── Scheduler state persistence ────────────────────────────────────────────────
+# Saved to disk so auto-run survives page reloads, sleep/wake, and reconnects.
+
+_SCHED_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "data", "scheduler_state.json")
+
+def _load_sched_state() -> dict:
+    """Read persisted scheduler settings from disk."""
+    try:
+        with open(_SCHED_STATE_FILE) as _f:
+            return json.load(_f)
+    except Exception:
+        return {}
+
+def _save_sched_state(auto: bool, cadence: int):
+    """Write scheduler settings to disk."""
+    try:
+        os.makedirs(os.path.dirname(_SCHED_STATE_FILE), exist_ok=True)
+        with open(_SCHED_STATE_FILE, "w") as _f:
+            json.dump({"auto_orchestrate": auto, "orch_cadence_minutes": cadence}, _f)
+    except Exception:
+        pass
+
 # ── Session state init ─────────────────────────────────────────────────────────
 
 def init_state():
+    _sched = _load_sched_state()
     defaults = {
         "client": None,
         "alpaca_client": None,
@@ -163,9 +188,9 @@ def init_state():
         "orch_result": None,
         "orch_evaluation": [],
         "intelligence_tab": "Orchestrator",
-        # ── Scheduler ──────────────────────────────────────────────
-        "auto_orchestrate": False,       # master on/off switch
-        "orch_cadence_minutes": 30,      # how often to fire
+        # ── Scheduler — loaded from disk so it persists across reloads ─────
+        "auto_orchestrate": _sched.get("auto_orchestrate", False),
+        "orch_cadence_minutes": _sched.get("orch_cadence_minutes", 30),
         "last_orch_run": None,           # datetime of last auto-run
         "orch_run_count": 0,             # total auto-runs this session
         # ── News Sentiment ─────────────────────────────────────────
@@ -474,7 +499,7 @@ with st.sidebar:
     auto_orch = st.toggle(
         "Run Automatically",
         value=st.session_state.auto_orchestrate,
-        help="Runs the orchestrator on the selected cadence. Keep this tab open.",
+        help="Runs the orchestrator on the selected cadence. Setting is saved — survives page reloads.",
     )
     st.session_state.auto_orchestrate = auto_orch
 
@@ -492,6 +517,9 @@ with st.sidebar:
         "Every 2 hours": 120, "Every 4 hours": 240,
     }
     st.session_state.orch_cadence_minutes = cadence_map[cadence_label]
+
+    # Persist toggle state to disk so it survives sleep/wake and page reloads
+    _save_sched_state(auto_orch, st.session_state.orch_cadence_minutes)
 
     # ── Countdown display ────────────────────────────────────────
     if auto_orch and st.session_state.last_orch_run:
