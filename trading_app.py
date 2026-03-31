@@ -899,10 +899,10 @@ try:
     for col, mk in zip(mode_cols, mode_keys):
         with col:
             m     = MODES[mk]
-            stats = perf.get("modes", {}).get(mk, {})
-            pnl   = stats.get("total_pnl", 0)
-            cycles= stats.get("cycles", 0)
-            wr    = stats.get("win_rate", 0)
+            _mode_stats = perf.get("modes", {}).get(mk, {})
+            pnl   = _mode_stats.get("total_pnl", 0)
+            cycles= _mode_stats.get("cycles", 0)
+            wr    = _mode_stats.get("win_rate", 0)
             is_active = (mk == current)
 
             pnl_str   = f"${pnl:+.2f}" if cycles else "No data"
