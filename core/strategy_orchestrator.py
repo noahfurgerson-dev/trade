@@ -654,10 +654,36 @@ class StrategyOrchestrator:
         self.decision_log = []
         self._log(f"Orchestrator cycle started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        evaluation = self.evaluate()
-        selected   = [r for r in evaluation if r["selected"]]
+        # ── Determine active trading mode ──────────────────────────────────
+        try:
+            from core.mode_manager import get_current_mode, get_strategies_for_mode, MODES
+            active_mode      = get_current_mode()
+            mode_strategies  = get_strategies_for_mode(active_mode)
+            mode_name        = MODES[active_mode]["name"]
+            self._log(f"Active mode: [{active_mode}] {mode_name}", "INFO")
+        except Exception as _me:
+            active_mode     = "algo_strategies"
+            mode_strategies = ["all"]
+            self._log(f"Mode manager unavailable ({_me}) — defaulting to algo_strategies", "WARN")
 
-        self._log(f"Selected {len(selected)} strategy/strategies to run.")
+        evaluation = self.evaluate()
+
+        # ── Mode-based strategy selection ──────────────────────────────────
+        if mode_strategies == ["all"]:
+            # Full orchestrator selection (algo_strategies mode)
+            selected = [r for r in evaluation if r["selected"]]
+        else:
+            # Force only the mode's designated strategies to run,
+            # regardless of their scores — the mode IS the decision.
+            selected = []
+            all_names = [r["name"] for r in evaluation]
+            for strat_name in mode_strategies:
+                if strat_name in all_names:
+                    r = next(r for r in evaluation if r["name"] == strat_name)
+                    r["selected"] = True
+                    selected.append(r)
+
+        self._log(f"Mode [{active_mode}] selected {len(selected)} strategy/strategies to run.")
 
         if dry_run:
             self._log("DRY RUN — no strategies executed.")
@@ -784,6 +810,19 @@ class StrategyOrchestrator:
                 )
             except Exception as _le:
                 self._log(f"  Perf log error: {_le}", "WARN")
+
+        # ── Log mode performance ────────────────────────────────────────────
+        try:
+            from core.mode_performance import log_mode_cycle
+            log_mode_cycle(
+                mode=active_mode,
+                pv_before=pv_before,
+                pv_after=pv_after,
+                actions=len(all_actions),
+                strategies_run=ran_strategies,
+            )
+        except Exception as _mpe:
+            self._log(f"  Mode perf log error: {_mpe}", "WARN")
 
         # ── Trigger adaptive learning cycle if due ──────────────────────────
         learning_result = None

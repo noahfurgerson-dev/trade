@@ -875,6 +875,160 @@ else:
 # INTELLIGENCE HUB
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Trading Mode A/B Test Panel ───────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">🔬 Trading Mode A/B Test — 5-Day Competition</div>',
+            unsafe_allow_html=True)
+st.caption("Three modes compete over 5 days. Auto-rotates every 8 hours. "
+           "Toggle manually anytime. Winner declared at day 5.")
+
+try:
+    from core.mode_manager     import get_mode_info, set_mode, resume_auto_rotation, MODES, ROTATION_ORDER
+    from core.mode_performance import get_summary, get_daily_breakdown
+
+    mode_info = get_mode_info()
+    current   = mode_info["current_mode"]
+    perf      = get_summary()
+
+    # ── Mode toggle buttons ────────────────────────────────────────────────
+    mode_cols = st.columns(3)
+    mode_keys = list(MODES.keys())
+    mode_icons = {"ai_consensus": "🤖", "news_sentiment": "📰", "algo_strategies": "⚙️"}
+    for col, mk in zip(mode_cols, mode_keys):
+        with col:
+            m     = MODES[mk]
+            stats = perf.get("modes", {}).get(mk, {})
+            pnl   = stats.get("total_pnl", 0)
+            cycles= stats.get("cycles", 0)
+            wr    = stats.get("win_rate", 0)
+            is_active = (mk == current)
+
+            pnl_str   = f"${pnl:+.2f}" if cycles else "No data"
+            pnl_color = "#10B981" if pnl >= 0 else "#EF4444"
+
+            st.markdown(f"""
+<div style="border: 2px solid {'#7C3AED' if is_active else '#374151'};
+            border-radius: 12px; padding: 14px; text-align: center;
+            background: {'rgba(124,58,237,0.15)' if is_active else 'transparent'};">
+  <div style="font-size:1.4em">{mode_icons.get(mk,'⚡')}</div>
+  <div style="font-weight:700; font-size:0.95em; color: {'#A78BFA' if is_active else '#D1D5DB'}">
+    {m['name']}</div>
+  <div style="font-size:0.75em; color:#9CA3AF; margin: 4px 0">{m['description'][:55]}…</div>
+  <div style="font-size:1.1em; font-weight:700; color:{pnl_color}">{pnl_str}</div>
+  <div style="font-size:0.72em; color:#6B7280">{cycles} cycles · {wr:.0f}% win rate</div>
+  {'<div style="font-size:0.72em; color:#A78BFA; margin-top:4px">● ACTIVE</div>' if is_active else ''}
+</div>""", unsafe_allow_html=True)
+
+            if not is_active:
+                if st.button(f"Switch to {m['name'].split()[0]}", key=f"mode_btn_{mk}",
+                             use_container_width=True):
+                    set_mode(mk)
+                    st.success(f"Switched to {m['name']}!")
+                    st.rerun()
+            else:
+                if mode_info["manual_override"]:
+                    if st.button("Resume Auto-Rotation", key=f"mode_auto_{mk}",
+                                 use_container_width=True):
+                        resume_auto_rotation()
+                        st.info("Auto-rotation resumed.")
+                        st.rerun()
+
+    st.markdown("")
+
+    # ── Status bar ────────────────────────────────────────────────────────
+    status_cols = st.columns(4)
+    with status_cols[0]:
+        st.metric("Active Mode", mode_info["current_info"]["name"].split()[0])
+    with status_cols[1]:
+        override_label = "Manual" if mode_info["manual_override"] else "Auto"
+        st.metric("Control", override_label)
+    with status_cols[2]:
+        st.metric("Next Switch", mode_info["next_switch_at"],
+                  delta=f"{mode_info['hours_remaining']:.1f}h remaining")
+    with status_cols[3]:
+        st.metric("Test Progress", f"Day {mode_info['days_elapsed']+1}/{5}",
+                  delta=f"{mode_info['days_left']}d left")
+
+    # ── 5-day performance chart ────────────────────────────────────────────
+    with st.expander("📊 5-Day Mode Performance Comparison", expanded=False):
+        mode_summary = perf.get("modes", {})
+        if mode_summary:
+            import plotly.graph_objects as _go
+
+            # Cumulative P&L chart per mode
+            fig = _go.Figure()
+            colors = {"ai_consensus": "#7C3AED", "news_sentiment": "#0EA5E9",
+                      "algo_strategies": "#10B981"}
+            for mk in ROTATION_ORDER:
+                if mk in mode_summary:
+                    series = mode_summary[mk].get("pnl_series", [])
+                    if series:
+                        cumulative = []
+                        total = 0.0
+                        for v in series:
+                            total += v
+                            cumulative.append(round(total, 4))
+                        fig.add_trace(_go.Scatter(
+                            x=list(range(1, len(cumulative)+1)),
+                            y=cumulative,
+                            name=MODES[mk]["name"],
+                            line=dict(color=colors.get(mk, "#9CA3AF"), width=2),
+                            mode="lines+markers",
+                        ))
+            fig.update_layout(
+                title="Cumulative P&L by Mode",
+                xaxis_title="Cycle #", yaxis_title="Cumulative P&L ($)",
+                plot_bgcolor="#0F1117", paper_bgcolor="#0F1117",
+                font=dict(color="#E5E7EB"),
+                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                height=320,
+            )
+            fig.add_hline(y=0, line_dash="dash", line_color="#4B5563")
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Summary table
+            rows = []
+            for mk in ROTATION_ORDER:
+                s = mode_summary.get(mk, {})
+                rows.append({
+                    "Mode":        MODES.get(mk, {}).get("name", mk),
+                    "Cycles":      s.get("cycles", 0),
+                    "Total P&L":   f"${s.get('total_pnl', 0):+.4f}",
+                    "Avg P&L":     f"${s.get('avg_pnl', 0):+.4f}",
+                    "Win Rate":    f"{s.get('win_rate', 0):.1f}%",
+                    "Trades":      s.get("total_actions", 0),
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        else:
+            st.info("No performance data yet — data accumulates as cycles run.")
+
+        # ── Winner announcement ────────────────────────────────────────────
+        if mode_info["test_complete"]:
+            winner = perf.get("winner")
+            if winner:
+                wstats = mode_summary.get(winner, {})
+                st.success(
+                    f"🏆 **5-Day Test Complete!**  "
+                    f"Winner: **{MODES.get(winner,{}).get('name', winner)}** "
+                    f"with ${wstats.get('total_pnl', 0):+.4f} total P&L "
+                    f"({wstats.get('win_rate',0):.1f}% win rate, "
+                    f"{wstats.get('cycles',0)} cycles)"
+                )
+                if st.button("Lock In Winner & Start New 5-Day Test", type="primary"):
+                    from core.mode_manager import initialize_rotation, set_mode as _sm
+                    _sm(winner)        # Start next test with the winner
+                    initialize_rotation()
+                    st.success("New 5-day test started with the winning mode!")
+                    st.rerun()
+        else:
+            days_left = mode_info["days_left"]
+            st.info(f"⏱ Winner declared in {days_left} day(s). Keep the scheduler running!")
+
+except Exception as _mode_err:
+    st.warning(f"Mode panel unavailable: {_mode_err}")
+
 st.markdown('<div class="section-title">Intelligence Hub — Strategy Orchestrator</div>',
             unsafe_allow_html=True)
 st.caption(
