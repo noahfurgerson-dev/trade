@@ -23,23 +23,8 @@ import sys
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
 
-# Force-load .env
-from dotenv import load_dotenv
-_ENV_FILE = os.path.join(_ROOT, ".env")
-load_dotenv(dotenv_path=_ENV_FILE, override=True)
-
-try:
-    with open(_ENV_FILE) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if not _line or _line.startswith("#") or "=" not in _line:
-                continue
-            _k, _v = _line.split("=", 1)
-            _k, _v = _k.strip(), _v.strip()
-            if _k and _v:
-                os.environ[_k] = _v
-except Exception:
-    pass
+from core.env_loader import load_env, build_clients
+load_env(_ROOT)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 _LOG_DIR  = os.path.join(_ROOT, "data")
@@ -60,40 +45,6 @@ log.addHandler(_handler)
 log.addHandler(_console)
 
 
-def _build_clients():
-    rh, alpaca = None, None
-
-    rh_key  = os.getenv("RH_API_KEY",     "").strip()
-    rh_priv = os.getenv("RH_PRIVATE_KEY", "").strip()
-    if rh_key and rh_priv:
-        try:
-            from core.robinhood import RobinhoodClient
-            rh = RobinhoodClient()
-            if rh.is_configured():
-                log.info("Robinhood client ready")
-            else:
-                log.warning("Robinhood keys present but client not configured")
-                rh = None
-        except Exception as e:
-            log.error(f"Robinhood init failed: {e}")
-
-    alp_key    = os.getenv("ALPACA_API_KEY",    "").strip()
-    alp_secret = os.getenv("ALPACA_API_SECRET", "").strip()
-    if alp_key and alp_secret:
-        try:
-            from core.alpaca_client import AlpacaClient
-            alpaca = AlpacaClient()
-            if alpaca.is_configured():
-                log.info("Alpaca client ready")
-            else:
-                log.warning("Alpaca keys present but client not configured")
-                alpaca = None
-        except Exception as e:
-            log.error(f"Alpaca init failed: {e}")
-
-    return rh, alpaca
-
-
 def main():
     parser = argparse.ArgumentParser(description="Run one trading cycle and exit")
     parser.add_argument("--dry-run", action="store_true",
@@ -103,7 +54,7 @@ def main():
     log.info("=" * 60)
     log.info(f"CYCLE START  dry_run={args.dry_run}")
 
-    rh, alpaca = _build_clients()
+    rh, alpaca = build_clients(log)
     if not rh and not alpaca:
         log.error("No clients available — check .env for RH_API_KEY / ALPACA_API_KEY")
         sys.exit(1)

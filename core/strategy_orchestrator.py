@@ -159,16 +159,12 @@ class StrategyOrchestrator:
             except Exception:
                 pass
 
-        # ── Fear & Greed ──────────────────────────────────────────────
+        # ── Fear & Greed (cached — shared with all strategy callers) ─────
         try:
-            import requests
-            resp = requests.get(
-                "https://api.alternative.me/fng/?limit=1&format=json",
-                timeout=5
-            )
-            data = resp.json().get("data", [{}])[0]
-            ctx["fear_greed"]       = int(data.get("value", 50))
-            ctx["fear_greed_label"] = data.get("value_classification", "Neutral")
+            from strategies.fear_greed import fetch_fear_greed
+            fng = fetch_fear_greed()
+            ctx["fear_greed"]       = fng.get("value", 50)
+            ctx["fear_greed_label"] = fng.get("label", "Neutral")
         except Exception:
             pass   # Use default 50 (neutral)
 

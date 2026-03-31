@@ -103,13 +103,11 @@ class AISignalStrategy(BaseStrategy):
             except Exception as e:
                 ctx_parts.append(f"Alpaca data unavailable: {e}")
 
-        # Pull live Fear & Greed
+        # Pull live Fear & Greed (cached — reuses result if called within 60s)
         try:
-            import requests as _req
-            fg = _req.get(
-                "https://api.alternative.me/fng/?limit=1&format=json", timeout=5
-            ).json()["data"][0]
-            ctx_parts.append(f"Fear & Greed Index: {fg['value']} ({fg['value_classification']})")
+            from strategies.fear_greed import fetch_fear_greed
+            fg = fetch_fear_greed()
+            ctx_parts.append(f"Fear & Greed Index: {fg['value']} ({fg['label']})")
         except Exception:
             pass
 

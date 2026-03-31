@@ -7,7 +7,6 @@ confirmation, exits on trailing stop or momentum reversal.
 Target coins: BTC, ETH, SOL, DOGE, ADA, AVAX, LINK, MATIC
 """
 
-import statistics
 from strategies.base import BaseStrategy
 from core.crypto_universe import get_pairs_for
 

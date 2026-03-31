@@ -25,6 +25,11 @@ class RobinhoodClient:
     Requires RH_API_KEY and RH_PRIVATE_KEY in .env
     """
 
+    # How long (seconds) to reuse cached account/holdings data within one cycle.
+    # 90s is safe: a full orchestrator run takes <30s, markets move slowly enough
+    # that stale-by-60s data is still accurate for order sizing decisions.
+    _CACHE_TTL = 90
+
     def __init__(self):
         # Strip whitespace/newlines — common copy-paste artifact that silently
         # breaks HTTP headers, causing "missing required headers" from Robinhood.
@@ -33,6 +38,12 @@ class RobinhoodClient:
         self._signing_key = None
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
+
+        # Per-cycle caches — reset by invalidate_cache() between cycles if needed
+        self._account_cache: dict  = {}
+        self._account_cache_ts: float = 0.0
+        self._holdings_cache: list = []
+        self._holdings_cache_ts: float = 0.0
 
         if self.api_key and self._private_key_b64:
             self._init_signing_key()
@@ -118,14 +129,25 @@ class RobinhoodClient:
 
     # ── Account ────────────────────────────────────────────────────────
 
+    def invalidate_cache(self):
+        """Force-expire both caches (call after placing an order)."""
+        self._account_cache_ts  = 0.0
+        self._holdings_cache_ts = 0.0
+
     def get_account(self) -> dict:
-        """Account details including buying power."""
+        """Account details including buying power (cached for _CACHE_TTL seconds)."""
+        now = time.time()
+        if self._account_cache and now - self._account_cache_ts < self._CACHE_TTL:
+            return self._account_cache
         try:
             data = self._get("/api/v1/crypto/trading/accounts/")
             results = data.get("results", [data])
-            return results[0] if results else {}
+            result = results[0] if results else {}
         except Exception as e:
             return {"error": str(e)}
+        self._account_cache    = result
+        self._account_cache_ts = now
+        return result
 
     def get_portfolio_value(self) -> float:
         acct = self.get_account()
@@ -139,7 +161,10 @@ class RobinhoodClient:
     # ── Holdings ───────────────────────────────────────────────────────
 
     def get_holdings(self) -> list[dict]:
-        """All crypto holdings with current value and P&L."""
+        """All crypto holdings with current value and P&L (cached for _CACHE_TTL seconds)."""
+        now = time.time()
+        if self._holdings_cache and now - self._holdings_cache_ts < self._CACHE_TTL:
+            return self._holdings_cache
         try:
             data = self._get("/api/v1/crypto/trading/holdings/")
             results = data.get("results", [])
@@ -209,6 +234,8 @@ class RobinhoodClient:
                     "_raw":          h,   # Keep raw for debugging
                 })
 
+            self._holdings_cache    = enriched
+            self._holdings_cache_ts = time.time()
             return enriched
         except Exception as e:
             print(f"Holdings error: {e}")
@@ -321,10 +348,14 @@ class RobinhoodClient:
             return {"error": str(e)}
 
     def buy_market(self, symbol: str, asset_quantity: float) -> dict:
-        return self.place_order(symbol, "buy", "market", asset_quantity=asset_quantity)
+        result = self.place_order(symbol, "buy", "market", asset_quantity=asset_quantity)
+        self.invalidate_cache()   # holdings and cash change after an order
+        return result
 
     def sell_market(self, symbol: str, asset_quantity: float) -> dict:
-        return self.place_order(symbol, "sell", "market", asset_quantity=asset_quantity)
+        result = self.place_order(symbol, "sell", "market", asset_quantity=asset_quantity)
+        self.invalidate_cache()
+        return result
 
     def buy_limit(self, symbol: str, asset_quantity: float, limit_price: float) -> dict:
         return self.place_order(symbol, "buy", "limit", asset_quantity=asset_quantity, limit_price=limit_price)

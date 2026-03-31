@@ -13,10 +13,12 @@ Classic contrarian logic: be greedy when others are fearful.
 Source: https://api.alternative.me/fng/
 """
 
+import time
 import requests
 from strategies.base import BaseStrategy
 
 FNG_URL = "https://api.alternative.me/fng/?limit=7&format=json"
+_FNG_CACHE_TTL = 60   # seconds — one fetch per minute across the whole process
 
 # Thresholds
 EXTREME_FEAR_BUY  = 25    # Score ≤ 25 → strong buy signal
@@ -28,16 +30,26 @@ from core.crypto_universe import get_pairs_for as _gpf
 BUY_PAIRS   = _gpf("fear_greed")
 SELL_PAIRS  = _gpf("fear_greed")
 
+_fng_cache: dict = {}   # {"ts": float, "data": dict}
+
 
 def fetch_fear_greed() -> dict:
-    """Fetch latest Fear & Greed data. Returns {value, label, history}"""
+    """
+    Fetch latest Fear & Greed data.  Returns {value, label, history}.
+    Results are cached for 60 seconds so multiple callers in the same cycle
+    (orchestrator, ai_signals, strategy itself) share a single HTTP request.
+    """
+    now = time.monotonic()
+    if _fng_cache.get("ts") and now - _fng_cache["ts"] < _FNG_CACHE_TTL:
+        return _fng_cache["data"]
+
     resp = requests.get(FNG_URL, timeout=8)
     resp.raise_for_status()
     data = resp.json().get("data", [])
     if not data:
         return {}
     latest = data[0]
-    return {
+    result = {
         "value": int(latest["value"]),
         "label": latest["value_classification"],
         "history": [
@@ -45,6 +57,9 @@ def fetch_fear_greed() -> dict:
             for d in data
         ],
     }
+    _fng_cache["ts"]   = now
+    _fng_cache["data"] = result
+    return result
 
 
 class FearGreedStrategy(BaseStrategy):
