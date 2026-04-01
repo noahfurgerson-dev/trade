@@ -21,3 +21,10 @@ playwright
 
 # Optional: faster HTTP for data fetches
 httpx>=0.27.0
+
+# Intelligent strategy features
+yfinance>=0.2.40          # Historical OHLCV for pattern recognition + ML models
+scikit-learn>=1.4.0       # GradientBoosting ML predictor
+numpy>=1.26.0             # Required by scikit-learn + market_data
+pyarrow>=14.0.0           # Parquet cache format for market_data
+vaderSentiment>=3.3.2     # NLP sentiment analysis (enhances news_sentiment.py)

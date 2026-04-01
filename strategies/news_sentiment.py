@@ -276,26 +276,56 @@ def fetch_all_news(use_cache: bool = True) -> list[dict]:
 
 # ── Sentiment scoring ─────────────────────────────────────────────────────────
 
+def _vader_score(text: str) -> float | None:
+    """
+    Use VADER NLP model for sentiment if vaderSentiment is installed.
+    Returns compound score in [-1, 1], or None if not available.
+    VADER is specifically trained on financial and social media text.
+    """
+    try:
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        _vader = SentimentIntensityAnalyzer()
+        return _vader.polarity_scores(text)["compound"]
+    except ImportError:
+        return None
+
+
 def score_sentiment(text: str) -> float:
     """
-    Keyword-based sentiment score.
-    Returns float: -3.0 (very bearish) to +3.0 (very bullish)
+    Two-layer sentiment scoring:
+      Layer 1 — VADER NLP model (if installed): trained on financial/social text
+      Layer 2 — Keyword scoring: domain-specific financial terms
+
+    Blends both when VADER is available (VADER 60%, keywords 40%).
+    Returns float: -3.0 (very bearish) to +3.0 (very bullish).
     """
     text_lower = text.lower()
-    score = 0.0
+
+    # Layer 2: keyword scoring
+    kw_score = 0.0
     for kw in BULLISH_STRONG:
         if kw in text_lower:
-            score += 1.0
+            kw_score += 1.0
     for kw in BULLISH_WEAK:
         if kw in text_lower:
-            score += 0.4
+            kw_score += 0.4
     for kw in BEARISH_STRONG:
         if kw in text_lower:
-            score -= 1.0
+            kw_score -= 1.0
     for kw in BEARISH_WEAK:
         if kw in text_lower:
-            score -= 0.4
-    return round(max(-3.0, min(3.0, score)), 2)
+            kw_score -= 0.4
+    kw_score = max(-3.0, min(3.0, kw_score))
+
+    # Layer 1: VADER NLP (optional, better on natural language)
+    vader = _vader_score(text)
+    if vader is not None:
+        # Scale VADER [-1,1] to [-3,3] and blend
+        vader_scaled = vader * 3.0
+        blended = (vader_scaled * 0.60) + (kw_score * 0.40)
+        return round(max(-3.0, min(3.0, blended)), 2)
+
+    return round(kw_score, 2)
 
 
 def extract_tickers(text: str) -> list[str]:

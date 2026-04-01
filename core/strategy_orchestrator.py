@@ -69,6 +69,10 @@ COOLDOWN_MINUTES = {
     "pairs_trading":              60,    # 1 hour
     "earnings_play":             120,    # 2 hours
     "news_sentiment":             30,    # 30 min — RSS cache is 15 min
+    # New intelligent strategies
+    "pattern_recognition":        60,    # 1 hour — yfinance cached
+    "ml_signals":                240,    # 4 hours — model retrained daily
+    "agent_swarm":               180,    # 3 hours — 4 AI calls
 }
 
 # Max strategies to run per cycle (avoids decision paralysis + cost)
@@ -167,6 +171,15 @@ class StrategyOrchestrator:
             ctx["fear_greed_label"] = fng.get("label", "Neutral")
         except Exception:
             pass   # Use default 50 (neutral)
+
+        # ── Seasonality score modifiers ───────────────────────────────────
+        try:
+            from core.seasonality import get_seasonal_score
+            ctx["seasonal_crypto"] = get_seasonal_score("crypto")
+            ctx["seasonal_stocks"] = get_seasonal_score("stocks")
+        except Exception:
+            ctx["seasonal_crypto"] = 1.0
+            ctx["seasonal_stocks"] = 1.0
 
         return ctx
 
@@ -523,6 +536,60 @@ class StrategyOrchestrator:
             reasons.append("Positive sentiment amplifies earnings beats")
         return min(score, 100), "; ".join(reasons)
 
+    def _score_pattern_recognition(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["rh_configured"]:
+            return 0, "Robinhood not configured"
+        score   = 55
+        reasons = ["Chart pattern detection provides high-probability technical entries"]
+        if ctx["cash_pct"] < 5:
+            score -= 25
+            reasons.append("Low cash — pattern buys won't execute")
+        # Patterns are more reliable in trending markets (moderate F&G)
+        fg = ctx["fear_greed"]
+        if 35 <= fg <= 75:
+            score += 15
+            reasons.append(f"Moderate F&G ({fg}) — trends and patterns more reliable")
+        seasonal = ctx.get("seasonal_crypto", 1.0)
+        if seasonal >= 1.10:
+            score += 10
+            reasons.append(f"Seasonally favorable period (x{seasonal:.2f})")
+        elif seasonal <= 0.90:
+            score -= 10
+            reasons.append(f"Seasonally unfavorable period (x{seasonal:.2f})")
+        return min(score, 100), "; ".join(reasons)
+
+    def _score_ml_signals(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["rh_configured"]:
+            return 0, "Robinhood not configured"
+        score   = 60
+        reasons = ["ML models trained on 2y of historical indicators"]
+        if ctx["cash_pct"] < 5:
+            score -= 20
+            reasons.append("Low cash — buy signals can't execute")
+        seasonal = ctx.get("seasonal_crypto", 1.0)
+        if seasonal >= 1.10:
+            score += 10
+            reasons.append(f"Seasonally favorable (x{seasonal:.2f})")
+        return min(score, 100), "; ".join(reasons)
+
+    def _score_agent_swarm(self, ctx: dict) -> tuple[int, str]:
+        if not ctx["rh_configured"] and not ctx["alpaca_configured"]:
+            return 0, "No platform configured"
+        # Requires Anthropic key
+        import os
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            return 0, "ANTHROPIC_API_KEY not set"
+        score   = 65
+        reasons = ["4 specialized AI agents: Sentiment, Technicals, Risk, Macro"]
+        if ctx["cash_pct"] < 5:
+            score -= 20
+            reasons.append("Low cash — buy signals can't execute")
+        fg = ctx["fear_greed"]
+        if fg <= 25 or fg >= 80:
+            score += 15
+            reasons.append(f"Extreme F&G ({fg}) — agent consensus most valuable at extremes")
+        return min(score, 100), "; ".join(reasons)
+
     # ── Main orchestration ─────────────────────────────────────────────────────
 
     def _is_on_cooldown(self, strategy_name: str) -> tuple[bool, str]:
@@ -576,6 +643,10 @@ class StrategyOrchestrator:
             "treasury":                   self._score_treasury,
             # News / AI
             "news_sentiment":             self._score_news_sentiment,
+            # New intelligent strategies
+            "pattern_recognition":        self._score_pattern_recognition,
+            "ml_signals":                 self._score_ml_signals,
+            "agent_swarm":                self._score_agent_swarm,
         }
 
         # Load adaptive weights (1.0 = neutral, >1 = boosted, <1 = penalised)
@@ -722,6 +793,8 @@ class StrategyOrchestrator:
         from strategies.pairs_trading            import PairsTradingStrategy
         from strategies.earnings_play            import EarningsPlayStrategy
         from strategies.news_sentiment           import NewsSentimentStrategy
+        from strategies.pattern_recognition     import PatternRecognitionStrategy
+        from strategies.ml_signals              import MLSignalStrategy
 
         # Build strategy instances (lazy — only for selected)
         def _build(name: str):
@@ -744,6 +817,11 @@ class StrategyOrchestrator:
             if name == "options_income"        and self.alpaca: return OptionsIncomeStrategy(self.alpaca)
             if name == "treasury"              and self.alpaca: return TreasuryIncomeStrategy(self.alpaca)
             if name == "news_sentiment":                        return NewsSentimentStrategy(self.rh, self.alpaca)
+            if name == "pattern_recognition"   and self.rh:     return PatternRecognitionStrategy(self.rh)
+            if name == "ml_signals"            and self.rh:     return MLSignalStrategy(self.rh)
+            if name == "agent_swarm":
+                # AgentSwarm is not a BaseStrategy — run inline
+                return None   # handled below
             return None
 
         # Execute: SELL strategies first (free up cash), then BUY
@@ -757,6 +835,97 @@ class StrategyOrchestrator:
 
         for result in ordered:
             name = result["name"]
+
+            # ── Agent Swarm: runs inline (not a BaseStrategy) ──────────────
+            if name == "agent_swarm":
+                self._log(f">>> Running agent_swarm (score={result['score']})...", "TRADE")
+                try:
+                    from core.agent_swarm import run_swarm, build_technicals_context
+                    from strategies.news_sentiment import fetch_all_news, analyse_articles
+
+                    rh_holdings = ""
+                    if self.rh and self.rh.is_configured():
+                        holdings = self.rh.get_holdings()
+                        cash     = self.rh.get_cash()
+                        equity   = self.rh.get_total_equity()
+                        rh_holdings = (
+                            f"Cash: ${cash:,.0f}  Equity: ${equity:,.0f}\n"
+                            + "\n".join(
+                                f"  {h['pair']}: qty={h['quantity']:.4f}  "
+                                f"value=${h['market_value']:,.0f}  pnl={h['pnl_pct']:+.1f}%"
+                                for h in holdings
+                            )
+                        )
+
+                    market_ctx = (
+                        f"F&G={ctx['fear_greed']} ({ctx['fear_greed_label']})  "
+                        f"Market={'OPEN' if ctx['market_open'] else 'CLOSED'}  "
+                        f"Seasonal crypto={ctx.get('seasonal_crypto',1.0):.2f}"
+                    )
+                    news_arts  = fetch_all_news(use_cache=True)
+                    news_ctx   = "\n".join(
+                        f"- {a['title']} ({a['source']})"
+                        for a in analyse_articles(news_arts)[:8]
+                    )
+                    tech_ctx   = build_technicals_context(
+                        ["BTC-USD", "ETH-USD", "SOL-USD", "NVDA", "SPY", "QQQ"]
+                    )
+                    swarm_tickers = ["BTC", "ETH", "SOL", "DOGE", "ADA",
+                                     "NVDA", "MSFT", "AAPL", "SPY", "QQQ"]
+
+                    swarm_result = run_swarm(
+                        market_context=market_ctx,
+                        portfolio_context=rh_holdings,
+                        tickers=swarm_tickers,
+                        news_context=news_ctx,
+                        technicals_context=tech_ctx,
+                    )
+
+                    # Execute STRONG BUY signals from swarm on crypto
+                    if self.rh and self.rh.is_configured():
+                        holdings_map = {h["pair"]: h for h in self.rh.get_holdings()}
+                        cash         = self.rh.get_cash()
+                        equity       = self.rh.get_total_equity()
+
+                        for ticker, cons in swarm_result.get("consensus", {}).items():
+                            if cons["action"] == "BUY" and cons["strength"] == "STRONG":
+                                pair = f"{ticker}-USD"
+                                if pair in holdings_map:
+                                    continue
+                                notional = min(equity * 0.05, cash * 0.20)
+                                if notional < 10:
+                                    continue
+                                quote = self.rh.get_quote(pair)
+                                price = quote.get("price", 0)
+                                if not price:
+                                    continue
+                                qty = notional / price
+                                self._log(
+                                    f"  SWARM BUY {pair} ${notional:.0f} "
+                                    f"(score={cons['score']:.0%}, {cons['agent_count']} agents agree)",
+                                    "TRADE"
+                                )
+                                order = self.rh.buy_market(pair, qty)
+                                all_actions.append({
+                                    "pair": pair, "action": "BUY",
+                                    "quantity": qty, "price": price, "notional": notional,
+                                    "strategy": "agent_swarm",
+                                    "reason": f"Agent swarm STRONG consensus BUY (score={cons['score']:.0%})",
+                                    "order_id": order.get("id"),
+                                })
+
+                    verdicts = swarm_result.get("agent_verdicts", [])
+                    for v in verdicts:
+                        self._log(f"  {v}")
+
+                    self.state["last_run"][name] = datetime.now().isoformat()
+                    result["swarm_result"] = swarm_result
+
+                except Exception as e:
+                    self._log(f"  agent_swarm FAILED: {e}", "WARN")
+                    result["error"] = str(e)
+                continue  # skip _build() path below
+
             strat = _build(name)
             if not strat:
                 self._log(f"  Cannot build {name} — client missing", "WARN")

@@ -2772,6 +2772,353 @@ for cat, rows in opp_by_cat.items():
             o_cols[3].markdown(f"<span style='color:{rc};font-size:0.75rem;font-weight:700'>{risk}</span>", unsafe_allow_html=True)
             o_cols[4].markdown(f"<span style='color:{sc};font-size:0.75rem;background:#1a1f2e;border-radius:4px;padding:2px 6px'>{src}</span>", unsafe_allow_html=True)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Pattern Recognition Panel ─────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">📐 Advanced Pattern Recognition</div>', unsafe_allow_html=True)
+st.caption("Scans crypto + stocks for Golden Cross, MACD crossovers, RSI divergence, BB squeeze, and volume breakouts.")
+
+with st.expander("🔍 Scan for Chart Patterns", expanded=False):
+    pat_col1, pat_col2 = st.columns([1, 3])
+    if pat_col1.button("Run Pattern Scan", type="primary", key="run_pattern_scan"):
+        with st.spinner("Scanning patterns across 24 assets..."):
+            try:
+                from strategies.pattern_recognition import scan_all_patterns, PATTERN_META
+                patterns = scan_all_patterns()
+                st.session_state["pattern_results"] = patterns
+            except Exception as e:
+                st.error(f"Pattern scan failed: {e}")
+
+    if st.session_state.get("pattern_results"):
+        patterns = st.session_state["pattern_results"]
+        if patterns:
+            p_df_rows = []
+            for p in patterns:
+                direction_icon = "🟢" if p["direction"] == "BULLISH" else ("🔴" if p["direction"] == "BEARISH" else "🟡")
+                signal_color   = "#3fb950" if p["signal"] == "BUY" else ("#f85149" if p["signal"] == "SELL" else "#f0883e")
+                p_df_rows.append({
+                    "Ticker":      p["ticker"],
+                    "Pattern":     p["pattern"].replace("_", " ").title(),
+                    "Direction":   f"{direction_icon} {p['direction']}",
+                    "Signal":      p["signal"],
+                    "Confidence":  f"{p['confidence']:.0%}",
+                    "Hist. Success": f"{p['hist_success']}%",
+                    "Price":       f"${p['price']:,.4f}",
+                    "Description": p["description"],
+                })
+            if p_df_rows:
+                import pandas as pd
+                p_df = pd.DataFrame(p_df_rows)
+                st.dataframe(p_df, use_container_width=True, hide_index=True)
+                actionable = [p for p in patterns if p["signal"] in ("BUY","SELL")]
+                st.success(f"Found {len(patterns)} patterns — {len(actionable)} actionable (BUY/SELL signals)")
+        else:
+            st.info("No high-confidence patterns detected in current market conditions.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── ML Predictions Panel ──────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">🧠 Predictive ML Models</div>', unsafe_allow_html=True)
+st.caption("GradientBoosting models trained on 2 years of indicator history. Predicts 3-day price direction per asset.")
+
+with st.expander("📊 ML Price Predictions", expanded=False):
+    ml_tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "DOGE-USD",
+                  "NVDA", "MSFT", "AAPL", "SPY", "QQQ"]
+
+    ml_c1, ml_c2 = st.columns([1, 3])
+    if ml_c1.button("Run ML Predictions", type="primary", key="run_ml_preds"):
+        with st.spinner("Computing predictions (first run trains models — may take 30s)..."):
+            try:
+                from core.ml_predictor import batch_predict
+                preds = batch_predict(ml_tickers)
+                st.session_state["ml_predictions"] = preds
+            except Exception as e:
+                st.error(f"ML predictions failed: {e}")
+
+    if st.session_state.get("ml_predictions"):
+        preds = st.session_state["ml_predictions"]
+        if preds:
+            rows = []
+            for p in preds:
+                up_bar = "█" * int(p["up_prob"] * 10)
+                rows.append({
+                    "Ticker":     p["ticker"],
+                    "Direction":  f"{'↑ UP' if p['direction']=='UP' else '↓ DOWN'}",
+                    "Confidence": f"{p['confidence']:.0%}",
+                    "UP Prob":    f"{p['up_prob']:.0%}  {up_bar}",
+                    "RSI":        p.get("features", {}).get("rsi", ""),
+                    "Mom 5d":     f"{p.get('features',{}).get('mom_5',''):+.2f}%" if p.get('features',{}).get('mom_5') else "",
+                    "Status":     "Trained" if p.get("trained") else "Cached",
+                })
+            import pandas as pd
+            ml_df = pd.DataFrame(rows)
+            st.dataframe(ml_df, use_container_width=True, hide_index=True)
+            up_count   = sum(1 for p in preds if p["direction"] == "UP")
+            down_count = sum(1 for p in preds if p["direction"] == "DOWN")
+            strong     = [p for p in preds if p["confidence"] >= 0.65]
+            st.info(f"**{up_count} UP / {down_count} DOWN** across {len(preds)} assets — {len(strong)} with ≥65% confidence")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Agent Swarm Panel ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">🐝 Autonomous Agent Swarm</div>', unsafe_allow_html=True)
+st.caption("4 specialized AI agents — Sentiment, Technicals, Risk, Macro — each analyse from their domain, then consensus is aggregated.")
+
+with st.expander("🤝 Run Agent Swarm Analysis", expanded=False):
+    swarm_tickers_input = st.text_input(
+        "Tickers to analyse (comma-separated)",
+        value="BTC, ETH, SOL, DOGE, NVDA, MSFT, SPY, QQQ",
+        key="swarm_tickers_input",
+    )
+    swarm_c1, _ = st.columns([1, 3])
+    if swarm_c1.button("Launch Swarm", type="primary", key="launch_swarm"):
+        tickers_list = [t.strip().upper() for t in swarm_tickers_input.split(",") if t.strip()]
+        if not tickers_list:
+            st.warning("Enter at least one ticker.")
+        else:
+            with st.spinner("4 AI agents analysing in sequence..."):
+                try:
+                    from core.agent_swarm import run_swarm, build_technicals_context
+                    from strategies.news_sentiment import fetch_all_news, analyse_articles
+                    from strategies.fear_greed import fetch_fear_greed
+
+                    rh = st.session_state.get("client")
+                    rh_ctx = ""
+                    if rh and rh.is_configured():
+                        holdings = rh.get_holdings()
+                        cash     = rh.get_cash()
+                        equity   = rh.get_total_equity()
+                        rh_ctx   = f"Cash: ${cash:,.0f}  Equity: ${equity:,.0f}\n" + \
+                                   "\n".join(f"  {h['pair']}: ${h['market_value']:,.0f}" for h in holdings)
+
+                    fng = fetch_fear_greed()
+                    mkt_ctx = f"F&G={fng.get('value',50)} ({fng.get('label','Neutral')})"
+
+                    arts    = fetch_all_news(use_cache=True)
+                    news_ctx = "\n".join(f"- {a['title']}" for a in analyse_articles(arts)[:8])
+                    tech_ctx = build_technicals_context(
+                        [t + "-USD" if not t.endswith("-USD") and len(t) <= 5 and t not in ("NVDA","MSFT","AAPL","SPY","QQQ","AMD","TSLA","META","GOOGL","AMZN") else t
+                         for t in tickers_list[:6]]
+                    )
+
+                    swarm_result = run_swarm(
+                        market_context=mkt_ctx,
+                        portfolio_context=rh_ctx,
+                        tickers=tickers_list,
+                        news_context=news_ctx,
+                        technicals_context=tech_ctx,
+                    )
+                    st.session_state["swarm_result"] = swarm_result
+                except Exception as e:
+                    st.error(f"Agent swarm failed: {e}")
+
+    if st.session_state.get("swarm_result"):
+        sr = st.session_state["swarm_result"]
+        agents_run    = sr.get("agents_run", [])
+        agents_failed = sr.get("agents_failed", [])
+
+        sw_c1, sw_c2, sw_c3, sw_c4 = st.columns(4)
+        for col, agent in zip([sw_c1, sw_c2, sw_c3, sw_c4],
+                              ["SentimentAgent","TechnicalsAgent","RiskAgent","MacroAgent"]):
+            ok = agent in agents_run
+            col.metric(agent.replace("Agent", ""), "✅ Done" if ok else "❌ Failed")
+
+        st.markdown("**Agent Verdicts:**")
+        for v in sr.get("agent_verdicts", []):
+            st.caption(v)
+
+        consensus = sr.get("consensus", {})
+        if consensus:
+            rows = []
+            for ticker, c in consensus.items():
+                action_icon = "🟢 BUY" if c["action"] == "BUY" else ("🔴 SELL" if c["action"] == "SELL" else "⚪ HOLD")
+                rows.append({
+                    "Ticker":    ticker,
+                    "Action":    action_icon,
+                    "Strength":  c.get("strength", ""),
+                    "Score":     f"{c['score']:.0%}",
+                    "Agents":    f"{c['agent_count']} / 4",
+                    "Buy Score":  f"{c['buy_score']:.2f}",
+                    "Sell Score": f"{c['sell_score']:.2f}",
+                })
+            import pandas as pd
+            swarm_df = pd.DataFrame(rows)
+            st.dataframe(swarm_df, use_container_width=True, hide_index=True)
+
+        buys  = sr.get("buy_tickers", [])
+        sells = sr.get("sell_tickers", [])
+        if buys:
+            st.success(f"**Swarm BUY consensus:** {', '.join(buys)}")
+        if sells:
+            st.warning(f"**Swarm SELL consensus:** {', '.join(sells)}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Seasonality Panel ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">📅 Seasonality Intelligence</div>', unsafe_allow_html=True)
+st.caption("Historical price pattern analysis across months, days-of-week, and hours. Informs strategy score adjustments.")
+
+with st.expander("🗓 Seasonal Analysis", expanded=False):
+    try:
+        from core.seasonality import get_seasonal_summary, get_asset_seasonality
+
+        seas = get_seasonal_summary()
+        seas_c1, seas_c2, seas_c3, seas_c4 = st.columns(4)
+        seas_c1.metric("Month", seas["month"])
+        seas_c2.metric("Day",   seas["day"])
+        seas_c3.metric("Crypto Score", f"×{seas['crypto_score']:.2f}", delta=seas["crypto_label"])
+        seas_c4.metric("Stocks Score", f"×{seas['stock_score']:.2f}",  delta=seas["stock_label"])
+        if seas.get("note"):
+            st.info(f"**Seasonal Note:** {seas['note']}")
+
+        st.markdown("**Bitcoin Monthly Seasonality (5-year average returns)**")
+        btc_seas = get_asset_seasonality("BTC-USD", years=5)
+        if btc_seas:
+            month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+                           7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+            import plotly.graph_objects as go
+            months  = [month_names[m] for m in sorted(btc_seas.keys())]
+            returns = [btc_seas[m] for m in sorted(btc_seas.keys())]
+            colors  = ["#3fb950" if r >= 0 else "#f85149" for r in returns]
+            fig_seas = go.Figure(go.Bar(
+                x=months, y=returns,
+                marker_color=colors,
+                text=[f"{r:+.1f}%" for r in returns],
+                textposition="outside",
+            ))
+            fig_seas.update_layout(
+                title="BTC Average Monthly Return (5yr)",
+                plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                font_color="#c9d1d9", height=300,
+                yaxis=dict(ticksuffix="%", gridcolor="#21262d"),
+                xaxis=dict(gridcolor="#21262d"),
+                margin=dict(l=20, r=20, t=40, b=20),
+            )
+            st.plotly_chart(fig_seas, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Seasonality data unavailable: {e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── No-Code Strategy Builder ──────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.markdown('<div class="section-title">⚙️ No-Code Strategy Builder</div>', unsafe_allow_html=True)
+st.caption("Describe a trading strategy in plain English. AI converts it to executable rules you can review and enable.")
+
+with st.expander("✏️ Build a Custom Strategy", expanded=False):
+    strategy_desc = st.text_area(
+        "Describe your strategy in plain English:",
+        placeholder=(
+            "Example: Buy BTC when the fear & greed index drops below 25 "
+            "and I haven't bought in the last 4 hours. "
+            "Sell when I'm up 15% or down 8% from entry."
+        ),
+        height=100,
+        key="strategy_builder_input",
+    )
+
+    sb_c1, sb_c2 = st.columns([1, 3])
+    if sb_c1.button("Generate Strategy", type="primary", key="gen_strategy"):
+        if not strategy_desc.strip():
+            st.warning("Please describe your strategy first.")
+        elif not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            st.error("ANTHROPIC_API_KEY required to generate strategies.")
+        else:
+            with st.spinner("Converting to executable rules..."):
+                try:
+                    import anthropic, re, json
+                    _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+                    parse_prompt = f"""You are a trading strategy parser. Convert the user's plain-English description into a structured strategy configuration.
+
+USER DESCRIPTION: {strategy_desc}
+
+Return ONLY valid JSON in this exact format:
+{{
+  "name": "Short descriptive name (3-5 words)",
+  "description": "One sentence summary",
+  "asset_type": "crypto|stocks|both",
+  "suggested_tickers": ["BTC-USD", "ETH-USD"],
+  "entry_conditions": [
+    {{"indicator": "fear_greed", "operator": "<=", "value": 25, "description": "F&G below 25"}},
+    {{"indicator": "rsi", "operator": "<=", "value": 35, "description": "RSI oversold"}}
+  ],
+  "exit_conditions": [
+    {{"type": "take_profit", "value": 15, "description": "Take profit at +15%"}},
+    {{"type": "stop_loss",   "value": 8,  "description": "Stop loss at -8%"}}
+  ],
+  "position_size_pct": 5,
+  "cooldown_hours": 4,
+  "risk_level": "low|medium|high",
+  "notes": "Any important caveats or notes about this strategy"
+}}
+
+Available indicators: fear_greed (0-100), rsi (0-100), momentum_5d (%), cash_pct (%), holding_count
+Available operators: <=, >=, ==, <, >
+Position size: percentage of portfolio per position (1-20%)"""
+
+                    msg = _client.messages.create(
+                        model="claude-sonnet-4-5",
+                        max_tokens=600,
+                        messages=[{"role": "user", "content": parse_prompt}],
+                    )
+                    raw = msg.content[0].text.strip()
+                    m = re.search(r"\{.*\}", raw, re.DOTALL)
+                    if m:
+                        config = json.loads(m.group())
+                        st.session_state["generated_strategy"] = config
+                    else:
+                        st.error("Could not parse strategy config from AI response.")
+                except Exception as e:
+                    st.error(f"Strategy generation failed: {e}")
+
+    if st.session_state.get("generated_strategy"):
+        cfg = st.session_state["generated_strategy"]
+        st.markdown("---")
+        st.markdown(f"### 📋 Generated: {cfg.get('name', 'Custom Strategy')}")
+        st.caption(cfg.get("description", ""))
+
+        gc1, gc2, gc3 = st.columns(3)
+        gc1.metric("Asset Type",    cfg.get("asset_type", "").title())
+        gc2.metric("Position Size", f"{cfg.get('position_size_pct', 5)}%")
+        gc3.metric("Risk Level",    cfg.get("risk_level", "").title())
+
+        st.markdown("**Entry Conditions** (all must be true to open a position):")
+        for cond in cfg.get("entry_conditions", []):
+            st.write(f"• {cond.get('description', str(cond))}")
+
+        st.markdown("**Exit Conditions:**")
+        for cond in cfg.get("exit_conditions", []):
+            st.write(f"• {cond.get('description', str(cond))}")
+
+        if cfg.get("notes"):
+            st.info(f"**Notes:** {cfg['notes']}")
+
+        if cfg.get("suggested_tickers"):
+            st.write(f"**Tickers:** {', '.join(cfg['suggested_tickers'])}")
+
+        sg_c1, sg_c2 = st.columns([1, 3])
+        if sg_c1.button("Save Strategy", key="save_generated_strategy"):
+            try:
+                save_path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "data", "custom_strategies.json"
+                )
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                existing = []
+                if os.path.exists(save_path):
+                    with open(save_path) as f:
+                        existing = json.load(f)
+                existing.append({**cfg, "created_at": datetime.now().isoformat(), "enabled": False})
+                with open(save_path, "w") as f:
+                    json.dump(existing, f, indent=2)
+                st.success(f"Strategy '{cfg['name']}' saved to data/custom_strategies.json")
+                st.session_state["generated_strategy"] = None
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
 # ── Footer ─────────────────────────────────────────────────────────────────────
 
 st.markdown("---")
